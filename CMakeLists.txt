@@ -22,7 +22,11 @@ target_link_libraries(lvgl PUBLIC Threads::Threads PNG::PNG m)
 add_executable(lvgl-console src/main.c src/ui.c src/keyboard.c)
 target_link_libraries(lvgl-console PRIVATE lvgl::lvgl)
 target_compile_options(lvgl-console PRIVATE -Wall -Wextra -Wpedantic)
-install(TARGETS lvgl-console RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+add_executable(lvgl-console-launcher src/launcher.c)
+target_compile_definitions(lvgl-console-launcher PRIVATE
+    APP_EXECUTABLE="${CMAKE_INSTALL_FULL_BINDIR}/lvgl-console")
+target_compile_options(lvgl-console-launcher PRIVATE -Wall -Wextra -Wpedantic)
+install(TARGETS lvgl-console lvgl-console-launcher RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(FILES assets/link.png DESTINATION ${CMAKE_INSTALL_DATADIR}/lvgl-console)
 
 option(LVGL_CONSOLE_TESTS "Build headless UI smoke test" OFF)
@@ -33,4 +37,15 @@ if(LVGL_CONSOLE_TESTS)
     target_link_libraries(lvgl-console-smoke PRIVATE lvgl::lvgl)
     target_compile_options(lvgl-console-smoke PRIVATE -Wall -Wextra -Wpedantic)
     add_test(NAME ui-smoke COMMAND lvgl-console-smoke)
+    if(NOT CMAKE_CROSSCOMPILING)
+        find_package(Python3 REQUIRED COMPONENTS Interpreter)
+        add_executable(lvgl-console-launcher-test src/launcher.c tests/launcher_mock.c)
+        target_compile_options(lvgl-console-launcher-test PRIVATE -Wall -Wextra -Wpedantic)
+        target_link_options(lvgl-console-launcher-test PRIVATE
+            -Wl,--wrap=open -Wl,--wrap=fstat -Wl,--wrap=ioctl -Wl,--wrap=fork)
+        add_test(NAME launcher COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_launcher.py
+            $<TARGET_FILE:lvgl-console-launcher-test>)
+        set_tests_properties(launcher PROPERTIES TIMEOUT 30)
+    endif()
 endif()
