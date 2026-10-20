@@ -12,7 +12,7 @@ static void add_button(lv_obj_t *parent, const char *text, uint32_t color)
     /* Deliberately no event handler: connection support comes later. */
 }
 
-void app_ui_create(lv_obj_t *screen)
+lv_obj_t *app_ui_create(lv_obj_t *screen)
 {
     lv_obj_t *tabs = lv_tabview_create(screen);
     lv_tabview_set_tab_bar_size(tabs, 48);
@@ -42,7 +42,18 @@ void app_ui_create(lv_obj_t *screen)
     lv_label_set_text(label, "Connection controls are placeholders.");
     lv_obj_center(label);
     label = lv_label_create(settings);
-    lv_label_set_text(label, "Settings will be available here.");
-    lv_obj_center(label);
+    lv_obj_set_flex_flow(settings, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(settings, 16, 0);
+    lv_label_set_text(label, "Keyboard text entry");
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_24, 0);
+    lv_obj_t *input = lv_textarea_create(settings);
+    lv_obj_set_width(input, LV_PCT(100));
+    lv_textarea_set_one_line(input, true);
+    lv_textarea_set_max_length(input, 128);
+    lv_textarea_set_placeholder_text(input, "Type using your external keyboard");
+    lv_textarea_set_text(input, "");
+    /* Only this field belongs to the physical keyboard's focus group.
+     * LVGL does not open a virtual keyboard unless the application creates one. */
     lv_tabview_set_active(tabs, 0, LV_ANIM_OFF);
+    return input;
 }

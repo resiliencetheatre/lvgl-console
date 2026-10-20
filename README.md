@@ -58,3 +58,16 @@ need to be checked on the Pi. For an installed build, omit the asset override;
 the default follows CMAKE_INSTALL_PREFIX/share/lvgl-console.
 # lvgl-console
 # lvgl-console
+
+## External keyboard demo
+
+Settings contains a labeled single-line text field (128 characters maximum).
+Tap it and type on an external keyboard. No on-screen keyboard is created or
+shown on focus. Text is for demonstration only and is not saved.
+
+At startup the first `/dev/input/by-id/*-event-kbd` device is opened, falling
+back to `/dev/input/keyboard`. Override this with
+`LV_LINUX_KEYBOARD_DEVICE=/dev/input/eventN`. Connect the keyboard before
+starting the app. The demo uses a US layout with Shift, Caps Lock, Backspace,
+Delete, Left/Right, Home and End; international layouts and hotplug are not
+implemented. Touch input continues to use `LV_LINUX_EVDEV_DEVICE`.

@@ -1,6 +1,9 @@
 #include "ui.h"
+#include "keyboard.h"
+#include <linux/input.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 static unsigned flushes;
 static void flush(lv_display_t *display, const lv_area_t *area, uint8_t *pixels)
@@ -26,7 +29,9 @@ int main(void)
         return EXIT_FAILURE;
     }
     lv_obj_t *screen = lv_display_get_screen_active(display);
-    app_ui_create(screen);
+    lv_obj_t *input = app_ui_create(screen);
+    lv_group_t *group = lv_group_create();
+    lv_group_add_obj(group, input);
     lv_obj_t *tabs = lv_obj_get_child(screen, 0);
     for (unsigned i = 0; i < 3; ++i) {
         unsigned before = flushes;
@@ -37,6 +42,35 @@ int main(void)
             fprintf(stderr, "Tab %u failed to render\n", i);
             return EXIT_FAILURE;
         }
+    }
+    lv_group_focus_obj(input);
+    /* Feed real evdev records through the keyboard reader without hardware. */
+    const struct input_event events[] = {
+        {.type = EV_KEY, .code = KEY_LEFTSHIFT, .value = 1},
+        {.type = EV_KEY, .code = KEY_H, .value = 1},
+        {.type = EV_KEY, .code = KEY_H, .value = 0},
+        {.type = EV_KEY, .code = KEY_LEFTSHIFT, .value = 0},
+        {.type = EV_KEY, .code = KEY_I, .value = 1},
+        {.type = EV_KEY, .code = KEY_I, .value = 0},
+        {.type = EV_KEY, .code = KEY_1, .value = 1},
+        {.type = EV_KEY, .code = KEY_1, .value = 0},
+        {.type = EV_KEY, .code = KEY_BACKSPACE, .value = 1},
+        {.type = EV_KEY, .code = KEY_BACKSPACE, .value = 0},
+    };
+    FILE *stream = tmpfile();
+    if (!stream) return EXIT_FAILURE;
+    if (fwrite(events, sizeof(events), 1, stream) != 1 || fflush(stream))
+        return EXIT_FAILURE;
+    char path[64];
+    snprintf(path, sizeof(path), "/proc/self/fd/%d", fileno(stream));
+    lv_indev_t *keyboard = app_keyboard_create(path, group);
+    if (!keyboard) return EXIT_FAILURE;
+    lv_indev_set_display(keyboard, display);
+    lv_indev_read(keyboard);
+    fclose(stream);
+    if (strcmp(lv_textarea_get_text(input), "Hi") != 0) {
+        fprintf(stderr, "Physical keyboard text entry failed\n");
+        return EXIT_FAILURE;
     }
     lv_deinit();
     puts("Logo decoding and all three tabs rendered successfully");

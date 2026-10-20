@@ -1,4 +1,5 @@
 #include "ui.h"
+#include "keyboard.h"
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,7 +23,8 @@ int main(int argc, char **argv)
         if (argc == 2 && strcmp(argv[1], "--help") == 0) {
             puts("Usage: lvgl-console\n"
                  "  LV_LINUX_FBDEV_DEVICE: framebuffer (default /dev/fb0)\n"
-                 "  LV_LINUX_EVDEV_DEVICE: pointer/touch device (default /dev/input/touchscreen)");
+                 "  LV_LINUX_EVDEV_DEVICE: pointer/touch device (default /dev/input/touchscreen)\n"
+                 "  LV_LINUX_KEYBOARD_DEVICE: keyboard event device (default USB auto-detection)");
             return EXIT_SUCCESS;
         }
         fprintf(stderr, "Usage: %s [--help]\n", argv[0]);
@@ -51,7 +53,11 @@ int main(int argc, char **argv)
         lv_deinit();
         return EXIT_FAILURE;
     }
-    app_ui_create(lv_display_get_screen_active(display));
+    lv_group_t *keyboard_group = lv_group_create();
+    lv_obj_t *text_input = app_ui_create(lv_display_get_screen_active(display));
+    lv_group_add_obj(keyboard_group, text_input);
+    lv_indev_t *keyboard = app_keyboard_create(getenv("LV_LINUX_KEYBOARD_DEVICE"), keyboard_group);
+    if (keyboard) lv_indev_set_display(keyboard, display);
     while (running) {
         /* fbdev supplies LVGL's monotonic tick callback. */
         uint32_t delay = lv_timer_handler();
