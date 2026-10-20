@@ -56,3 +56,4 @@ The smoke test decodes the logo header and renders each tab through an
 in-memory display at 800x480. Actual framebuffer output and touch input still
 need to be checked on the Pi. For an installed build, omit the asset override;
 the default follows CMAKE_INSTALL_PREFIX/share/lvgl-console.
+# lvgl-console
