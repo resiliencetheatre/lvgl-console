@@ -8,6 +8,7 @@
 
 typedef struct {
     int fd;
+    lv_obj_t *tabs;
     bool left_shift, right_shift, caps;
     uint32_t key;
     lv_indev_state_t state;
@@ -55,6 +56,20 @@ static void read_keyboard(lv_indev_t *indev, lv_indev_data_t *data)
     struct input_event event;
     while (read(keyboard->fd, &event, sizeof(event)) == sizeof(event)) {
         if (event.type != EV_KEY) continue;
+        if (keyboard->tabs && (event.code == KEY_LEFT || event.code == KEY_RIGHT)) {
+            /* Consume release and kernel repeat too, so navigation never
+             * reaches the text field or repeats at the keyboard's 33 ms rate. */
+            if (event.value == 1) {
+                uint32_t count = lv_tabview_get_tab_count(keyboard->tabs);
+                uint32_t active = lv_tabview_get_tab_active(keyboard->tabs);
+                if (count) {
+                    uint32_t next = event.code == KEY_RIGHT
+                        ? (active + 1) % count : (active + count - 1) % count;
+                    lv_tabview_set_active(keyboard->tabs, next, LV_ANIM_OFF);
+                }
+            }
+            continue;
+        }
         if (event.code == KEY_LEFTSHIFT) keyboard->left_shift = event.value != 0;
         else if (event.code == KEY_RIGHTSHIFT) keyboard->right_shift = event.value != 0;
         else if (event.code == KEY_CAPSLOCK) {
@@ -84,7 +99,7 @@ static void delete_keyboard(lv_event_t *event)
     free(keyboard);
 }
 
-lv_indev_t *app_keyboard_create(const char *path, lv_group_t *group)
+lv_indev_t *app_keyboard_create(const char *path, lv_group_t *group, lv_obj_t *tabs)
 {
     glob_t matches = {0};
     if (!path || !*path) {
@@ -104,6 +119,7 @@ lv_indev_t *app_keyboard_create(const char *path, lv_group_t *group)
         return NULL;
     }
     keyboard->fd = fd;
+    keyboard->tabs = tabs;
     lv_indev_set_type(indev, LV_INDEV_TYPE_KEYPAD);
     lv_indev_set_user_data(indev, keyboard);
     lv_indev_set_read_cb(indev, read_keyboard);
