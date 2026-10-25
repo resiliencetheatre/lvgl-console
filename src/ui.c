@@ -3,6 +3,7 @@
 #include "ptt_status.h"
 #include "settings.h"
 #include <errno.h>
+#include <math.h>
 #include <string.h>
 #include <fcntl.h>
 #include <linux/fb.h>
@@ -10,18 +11,167 @@
 #include <stdlib.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
+#include "world_map_data.h"
 
+/* Flat equirectangular outline, deliberately quieter than the foreground logo. */
+#define WORLD_MAP_COLOR 0x206B12
+#define WORLD_FADE_TICKS 40 /* Four-second crossfade at 100 ms updates. */
+#define WORLD_WAIT_MIN_TICKS 20
+#define WORLD_WAIT_MAX_TICKS 60
 static int sleep_fd = -1;
-static lv_timer_t *wake_timer;
-static lv_obj_t *sleep_button;
-static lv_obj_t *sleep_status;
+/* Decorative locations, not live network activity; longitude/latitude × 10. */
+static const int16_t world_locations[][2] = {
+    {-980, 390}, {100, 510}, {1380, 370}, {1340, -250}, {200, 0}, {-600, -150},
+    {-1060, 570}, {900, 600}, {250, -290} /* Canada, Russia, South Africa */
+};
+#define WORLD_LOCATION_COUNT (sizeof(world_locations) / sizeof(world_locations[0]))
+struct world_animation {
+    lv_obj_t *map, *tabs;
+    lv_timer_t *timer;
+    unsigned previous, current, next, tick, wait_ticks, pulse_tick;
+};
+
+static void world_bounds(lv_obj_t *obj, lv_area_t *bounds)
+{
+    lv_area_t area;
+    lv_obj_get_content_coords(obj, &area);
+    int32_t width = lv_area_get_width(&area) - 8;
+    int32_t height = lv_area_get_height(&area) - 8;
+    if (width > height * 2) width = height * 2;
+    if (width < 2) width = 2;
+    height = width / 2;
+    bounds->x1 = area.x1 + (lv_area_get_width(&area) - width) / 2;
+    bounds->y1 = area.y1 + (lv_area_get_height(&area) - height) / 2;
+    bounds->x2 = bounds->x1 + width;
+    bounds->y2 = bounds->y1 + height;
+}
+
+static lv_point_t world_point(struct world_animation *animation, unsigned location)
+{
+    lv_area_t map;
+    world_bounds(animation->map, &map);
+    const int16_t *point = world_locations[location];
+    return (lv_point_t){map.x1 + (point[0] + 1800) * (map.x2-map.x1) / 3600,
+                        map.y1 + (900-point[1]) * (map.y2-map.y1) / 1800};
+}
+
+static unsigned pick_world_location(unsigned a, unsigned b, unsigned c)
+{
+    unsigned choices[WORLD_LOCATION_COUNT], count = 0;
+    for (unsigned i = 0; i < WORLD_LOCATION_COUNT; ++i)
+        if (i != a && i != b && i != c) choices[count++] = i;
+    return choices[lv_rand(0, count-1)];
+}
+
+static void invalidate_world_links(struct world_animation *animation)
+{
+    lv_point_t points[] = {world_point(animation, animation->previous),
+                           world_point(animation, animation->current),
+                           world_point(animation, animation->next)};
+    for (unsigned i = 0; i < 2; ++i) {
+        lv_area_t area = {
+            LV_MIN(points[i].x, points[i+1].x)-6,
+            LV_MIN(points[i].y, points[i+1].y)-6,
+            LV_MAX(points[i].x, points[i+1].x)+6,
+            LV_MAX(points[i].y, points[i+1].y)+6
+        };
+        lv_obj_invalidate_area(animation->map, &area);
+    }
+}
+
+static void pulse_world(lv_timer_t *timer)
+{
+    struct world_animation *animation = lv_timer_get_user_data(timer);
+    if (sleep_fd >= 0 || lv_tabview_get_tab_active(animation->tabs) != 0) return;
+    invalidate_world_links(animation);
+    animation->pulse_tick = (animation->pulse_tick + 1) % 40;
+    if (++animation->tick >= animation->wait_ticks + WORLD_FADE_TICKS) {
+        unsigned old = animation->previous;
+        animation->previous = animation->current;
+        animation->current = animation->next;
+        animation->next = pick_world_location(old, animation->previous, animation->current);
+        animation->tick = 0;
+        animation->wait_ticks = lv_rand(WORLD_WAIT_MIN_TICKS, WORLD_WAIT_MAX_TICKS);
+    }
+    invalidate_world_links(animation);
+}
+
+static void draw_world_activity(struct world_animation *animation, lv_layer_t *layer)
+{
+    /* The shared endpoint stays visible as the old link fades and the next
+     * link rises. A faint preview keeps all three locations legible. */
+    float progress = animation->tick <= animation->wait_ticks ? 0.0f :
+        (float)(animation->tick-animation->wait_ticks) / WORLD_FADE_TICKS;
+    float fade = progress * progress * (3.0f - 2.0f * progress);
+    float pulse = 0.5f - 0.5f * cosf(animation->pulse_tick * 6.2831853f / 40.0f);
+    unsigned brightness = 180 + (unsigned)(75 * pulse);
+    unsigned opacity[] = {24 + (unsigned)((brightness-24)*(1.0f-fade)),
+                          brightness, 24 + (unsigned)((brightness-24)*fade)};
+    lv_point_t points[] = {world_point(animation, animation->previous),
+                           world_point(animation, animation->current),
+                           world_point(animation, animation->next)};
+    lv_draw_line_dsc_t line;
+    lv_draw_line_dsc_init(&line);
+    line.color = lv_color_hex(0xFF1010);
+    line.width = 1;
+    for (unsigned i = 0; i < 2; ++i) {
+        line.p1.x = points[i].x; line.p1.y = points[i].y;
+        line.p2.x = points[i+1].x; line.p2.y = points[i+1].y;
+        line.opa = opacity[i == 0 ? 0 : 2] * 3 / 4;
+        lv_draw_line(layer, &line);
+    }
+    for (unsigned i = 0; i < 3; ++i) {
+        lv_draw_rect_dsc_t dot;
+        lv_draw_rect_dsc_init(&dot);
+        dot.bg_color = lv_color_hex(0xFF1010);
+        dot.bg_opa = opacity[i];
+        dot.radius = LV_RADIUS_CIRCLE;
+        lv_area_t bounds = {points[i].x-5, points[i].y-5, points[i].x+5, points[i].y+5};
+        lv_draw_rect(layer, &dot, &bounds);
+    }
+}
+
+static void delete_world_animation(lv_event_t *event)
+{
+    struct world_animation *animation = lv_event_get_user_data(event);
+    if (animation->timer) lv_timer_delete(animation->timer);
+    free(animation);
+}
+
+static void draw_world_map(lv_event_t *event)
+{
+    lv_obj_t *obj = lv_event_get_current_target_obj(event);
+    struct world_animation *animation = lv_event_get_user_data(event);
+    lv_area_t area;
+    world_bounds(obj, &area);
+    int32_t x = area.x1, y = area.y1;
+    int32_t width = area.x2-area.x1, height = area.y2-area.y1;
+    lv_layer_t *layer = lv_event_get_layer(event);
+    lv_draw_line_dsc_t line;
+    lv_draw_line_dsc_init(&line);
+    line.base.layer = layer;
+    line.color = lv_color_hex(WORLD_MAP_COLOR);
+    line.width = 1;
+    line.opa = LV_OPA_COVER;
+    for (unsigned i = 0; i < sizeof(world_segments) / sizeof(world_segments[0]); ++i) {
+        const int16_t *segment = world_segments[i];
+        line.p1.x = x + (segment[0] + 1800) * width / 3600;
+        line.p1.y = y + (900 - segment[1]) * height / 1800;
+        line.p2.x = x + (segment[2] + 1800) * width / 3600;
+        line.p2.y = y + (900 - segment[3]) * height / 1800;
+        if (line.p1.x != line.p2.x || line.p1.y != line.p2.y)
+            lv_draw_line(layer, &line);
+    }
+    if (animation) draw_world_activity(animation, layer);
+}
 
 /* Single-line metrics plus a wider PTT box at 640px. */
 #define STATUS_BOX_WIDTH 104
 #define STATUS_BOX_HEIGHT 28
 #define STATUS_BAR_HEIGHT 36
 #define STATUS_ALARM_COLOR 0x401010
-#define STATUS_RX_COLOR 0x101040
+#define STATUS_TX_COLOR 0xF01010
+#define STATUS_RX_COLOR 0x1010F0
 
 struct ping_panel {
     lv_obj_t *boxes[4];
@@ -46,7 +196,7 @@ static void ping_tick(lv_timer_t *timer)
     char text[320];
     app_ptt_status_read("/run/udpptt/state", "/tmp/udpptt.sock", text, sizeof(text));
     set_label_if_changed(panel->ptt_label, text);
-    unsigned ptt_color = !strncmp(text, "TX ", 3) ? STATUS_ALARM_COLOR :
+    unsigned ptt_color = !strncmp(text, "TX ", 3) ? STATUS_TX_COLOR :
                          !strncmp(text, "RX ", 3) ? STATUS_RX_COLOR : 0;
     if (ptt_color != panel->ptt_color) {
         panel->ptt_color = ptt_color;
@@ -188,61 +338,17 @@ void app_ui_add_settings_to_group(lv_group_t *group)
 /* Also called before LVGL shuts down, so a normal exit cannot leave HDMI off. */
 void app_ui_resume_display(void)
 {
-    if (wake_timer) {
-        lv_timer_delete(wake_timer);
-        wake_timer = NULL;
-    }
     if (sleep_fd < 0) return;
     int result = ioctl(sleep_fd, FBIOBLANK, FB_BLANK_UNBLANK);
     if (result < 0) perror("Display unblank");
     close(sleep_fd);
     sleep_fd = -1;
-    lv_obj_remove_state(sleep_button, LV_STATE_DISABLED);
-    lv_label_set_text(sleep_status, result < 0 ? "Display wake failed; see log." : "Display resumed.");
-    lv_display_t *display = lv_obj_get_display(sleep_button);
+    if (result < 0) lv_label_set_text(save_feedback, "Display wake failed; see log.");
+    lv_display_t *display = lv_obj_get_display(save_feedback);
     lv_obj_invalidate(lv_display_get_screen_active(display));
     lv_obj_invalidate(lv_display_get_layer_top(display));
     lv_obj_invalidate(lv_display_get_layer_sys(display));
     lv_refr_now(display);
-}
-
-static void wake_display(lv_timer_t *timer)
-{
-    (void)timer;
-    app_ui_resume_display();
-}
-
-static void sleep_display(lv_event_t *event)
-{
-    (void)event;
-    if (sleep_fd >= 0) return;
-    const char *path = getenv("LV_LINUX_FBDEV_DEVICE");
-    if (!path || !*path) path = "/dev/fb0";
-    sleep_fd = open(path, O_RDWR | O_CLOEXEC);
-    if (sleep_fd < 0) {
-        perror("Open framebuffer for blanking");
-        lv_label_set_text(sleep_status, "Cannot open display; see log.");
-        return;
-    }
-    wake_timer = lv_timer_create(wake_display, 5000, NULL);
-    if (!wake_timer) {
-        close(sleep_fd);
-        sleep_fd = -1;
-        lv_label_set_text(sleep_status, "Cannot schedule display wake.");
-        return;
-    }
-    if (ioctl(sleep_fd, FBIOBLANK, FB_BLANK_POWERDOWN) < 0) {
-        perror("Display blank");
-        lv_timer_delete(wake_timer);
-        wake_timer = NULL;
-        close(sleep_fd);
-        sleep_fd = -1;
-        lv_label_set_text(sleep_status, "Display sleep failed; see log.");
-        return;
-    }
-    lv_timer_reset(wake_timer);
-    lv_obj_add_state(sleep_button, LV_STATE_DISABLED);
-    lv_label_set_text(sleep_status, "Waking in 5 seconds...");
 }
 
 /* Keep the palette here so every tab and nested widget uses the same theme. */
@@ -343,15 +449,26 @@ lv_obj_t *app_ui_create(lv_obj_t *screen)
     lv_tabview_set_tab_bar_size(tabs, 48);
     lv_obj_set_size(tabs, LV_PCT(100), lv_obj_get_height(screen) - STATUS_BAR_HEIGHT);
     lv_obj_t *comm = lv_tabview_add_tab(tabs, "PTT");
+    /* DRAW_MAIN runs behind child widgets, including the centered Link PNG. */
+    struct world_animation *animation = calloc(1, sizeof(*animation));
+    if (animation) {
+        animation->map = comm;
+        animation->tabs = tabs;
+        animation->previous = lv_rand(0, WORLD_LOCATION_COUNT-1);
+        animation->current = pick_world_location(animation->previous, WORLD_LOCATION_COUNT, WORLD_LOCATION_COUNT);
+        animation->next = pick_world_location(animation->previous, animation->current, WORLD_LOCATION_COUNT);
+        animation->wait_ticks = lv_rand(WORLD_WAIT_MIN_TICKS, WORLD_WAIT_MAX_TICKS);
+        animation->timer = lv_timer_create(pulse_world, 100, animation);
+        lv_obj_add_event_cb(comm, delete_world_animation, LV_EVENT_DELETE, animation);
+    }
+    lv_obj_add_event_cb(comm, draw_world_map, LV_EVENT_DRAW_MAIN, animation);
     lv_obj_t *status = lv_tabview_add_tab(tabs, "Messaging");
     lv_obj_t *settings = lv_tabview_add_tab(tabs, "Settings");
-    lv_obj_set_flex_flow(comm, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(comm, LV_FLEX_ALIGN_CENTER,
-                         LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_t *logo = lv_image_create(comm);
     lv_image_set_src(logo, "A:/link.png");
     lv_obj_set_size(logo, LV_PCT(100), 101);
     lv_image_set_inner_align(logo, LV_IMAGE_ALIGN_CONTAIN);
+    lv_obj_align(logo, LV_ALIGN_BOTTOM_MID, 0, -8);
 
     lv_obj_set_flex_flow(status, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(status, 8, 0);
@@ -376,29 +493,42 @@ lv_obj_t *app_ui_create(lv_obj_t *screen)
     lv_obj_set_flex_flow(settings, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(settings, 16, 0);
     int loaded = app_settings_load("/etc/default/udpptt", &saved_settings);
-    const char *field_labels[] = {"PTT transmit ID", "PTT dpi ID", "PTT preamble ID\n(5 letters only)"};
+    const char *field_labels[] = {"Transmit ID", "dpi ID", "preamble ID"};
     const char *values[] = {saved_settings.txid, saved_settings.dpi_id, saved_settings.preamble};
+    lv_obj_t *fields_row = lv_obj_create(settings);
+    lv_obj_set_size(fields_row, LV_PCT(100), 150);
+    lv_obj_set_style_pad_all(fields_row, 0, 0);
+    lv_obj_set_style_border_width(fields_row, 0, 0);
+    lv_obj_set_scrollable(fields_row, false);
+    lv_obj_set_flex_flow(fields_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(fields_row, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                         LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
     for (unsigned i = 0; i < 3; ++i) {
-        lv_obj_t *row = lv_obj_create(settings);
-        lv_obj_set_size(row, LV_PCT(100), 52);
-        lv_obj_set_style_pad_all(row, 0, 0);
-        lv_obj_set_style_border_width(row, 0, 0);
-        lv_obj_set_scrollable(row, false);
-        lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
-        lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-        settings_fields[i] = lv_textarea_create(row);
-        lv_obj_set_size(settings_fields[i], 210, 44);
+        lv_obj_t *column = lv_obj_create(fields_row);
+        lv_obj_set_size(column, 168, LV_PCT(100));
+        lv_obj_set_style_pad_all(column, 0, 0);
+        lv_obj_set_style_pad_row(column, 8, 0);
+        lv_obj_set_style_border_width(column, 0, 0);
+        lv_obj_set_scrollable(column, false);
+        lv_obj_set_flex_flow(column, LV_FLEX_FLOW_COLUMN);
+        lv_obj_t *caption = lv_label_create(column);
+        lv_label_set_text(caption, field_labels[i]);
+        lv_obj_set_style_text_font(caption, &lv_font_montserrat_20, 0);
+        settings_fields[i] = lv_textarea_create(column);
+        lv_obj_set_size(settings_fields[i], LV_PCT(100), 44);
         lv_obj_set_scroll_on_focus(settings_fields[i], false);
         lv_textarea_set_one_line(settings_fields[i], true);
         lv_textarea_set_max_length(settings_fields[i], i == 2 ? 5 : i == 0 ? 31 : 63);
         lv_textarea_set_accepted_chars(settings_fields[i], i == 2 ? "ABCDEFGHIJKLMNOPQRSTUVWXYZ" :
             "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-");
         lv_textarea_set_text(settings_fields[i], values[i]);
-        lv_obj_t *caption = lv_label_create(row);
-        lv_label_set_text(caption, field_labels[i]);
+        if (i == 2) {
+            lv_obj_t *hint = lv_label_create(column);
+            lv_label_set_text(hint, "(5 letters only)");
+        }
     }
     saver_checkbox = lv_checkbox_create(settings);
-    lv_checkbox_set_text(saver_checkbox, "Screen saver (60 seconds)");
+    lv_checkbox_set_text(saver_checkbox, "Screen saver");
     if (saved_settings.screensaver) lv_obj_add_state(saver_checkbox, LV_STATE_CHECKED);
     lv_obj_set_scroll_on_focus(saver_checkbox, false);
     save_button = lv_button_create(settings);
@@ -413,14 +543,6 @@ lv_obj_t *app_ui_create(lv_obj_t *screen)
     lv_label_set_text(save_feedback, loaded ? "Configuration unavailable; defaults shown." : "");
     lv_timer_t *saver_timer = lv_timer_create(saver_tick, 250, lv_obj_get_display(screen));
     if (saver_timer) lv_obj_add_event_cb(screen, delete_saver_timer, LV_EVENT_DELETE, saver_timer);
-    sleep_button = lv_button_create(settings);
-    lv_obj_set_size(sleep_button, LV_SIZE_CONTENT, 60);
-    lv_obj_t *sleep_label = lv_label_create(sleep_button);
-    lv_label_set_text(sleep_label, "Sleep screen for 5 seconds");
-    lv_obj_center(sleep_label);
-    lv_obj_add_event_cb(sleep_button, sleep_display, LV_EVENT_CLICKED, NULL);
-    sleep_status = lv_label_create(settings);
-    lv_label_set_text(sleep_status, "Wakes automatically and redraws the screen.");
     /* No virtual keyboard is created. */
     lv_tabview_set_active(tabs, 0, LV_ANIM_OFF);
     create_ping_panel(screen);

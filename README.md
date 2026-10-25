@@ -2,9 +2,25 @@
 
 Small LVGL 9.6.0 console for the Raspberry Pi 4 Linux framebuffer. Uses the
 fbdev/evdev setup from lvgl-video and the logo/tab conventions from lvgl-com.
-The first tab, PTT, opens at startup and shows link.png centered in its content
-area. Messaging provides a local chat demo; Settings edits PTT identities and
-screen-saver preferences and contains a display sleep test.
+The first tab, PTT, opens at startup and shows link.png horizontally centered in
+the lower third above the status bar, over a dim-green world map excluding
+Antarctica. The map is drawn as LVGL lines in a flat equirectangular projection,
+without a new image decoder. `WORLD_MAP_COLOR` in `src/ui.c` controls its color.
+Decorative bright-red dots pulse in connected pairs across the US, Europe,
+Japan, Australia, Africa, South America, Canada, Russia, and South Africa.
+A shared endpoint remains bright while the old endpoint and red connecting line
+fade down and the next endpoint/link fade up over four seconds. A faint preview
+keeps the previous/current/next locations visible. Each pair holds for a randomly
+chosen two to six seconds before transitioning. New destinations are random,
+excluding the current chain's three locations. These markers do not represent
+live network activity. Timing constants are at the top of `src/ui.c`.
+The 100 ms animation timer invalidates the affected link/marker areas and pauses
+while another tab is selected or the screen is blanked.
+The compiled outline data in `src/world_map_data.h` is simplified from Natural
+Earth's public-domain 1:110m country dataset. `tools/generate_world_map.py`
+documents the source and regenerates the header from its GeoJSON.
+Messaging provides a local chat demo; Settings edits PTT identities and
+screen-saver preferences.
 
 The UI uses black backgrounds and neon green (`#39FF14`) text, borders,
 scrollbars, and logo. Active tab titles and pressed buttons use a dim green
@@ -99,12 +115,12 @@ The dim-red alarm background is selected when loss exceeds
 
 Ping files are checked once per second on every tab; speech state is checked
 four times per second. Unchanged labels and alarm colors are not redrawn, and
-polling pauses during the display sleep test. Files are reopened on each read
+polling pauses while the screen saver has blanked the display. Files are reopened on each read
 for atomic replacement. Enable PocketTerm `dpinger.service` to supply reports.
 
 The speech box displays `PTT idle`, `TX <txid>`, or `RX <talker>` (both when
-applicable); long text scrolls within the box. Its background is dim red during
-TX, dim blue during RX, and black when idle or unavailable. TX takes priority
+applicable); long text scrolls within the box. Its background is bright red during
+TX, bright blue during RX, and black when idle or unavailable. TX takes priority
 when both are active. `/tmp/udpptt.sock` is a command-only
 socket, so the UI checks it with a nonblocking connect without sending commands
 and reads activity from `/run/udpptt/state`. Start the client with
@@ -129,20 +145,12 @@ to load or save configuration. Restart `udpptt.service` to apply identity change
 saving does not interrupt an active call or regenerate DPI keys. Install the
 updated PocketTerm service, which reads all three identity environment variables.
 
-**Screen saver (60 seconds)** is saved as `UDPPTT_SCREENSAVER=0` or `1` in the
+**Screen saver** is saved as `UDPPTT_SCREENSAVER=0` or `1` in the
 same file. After Save, this preference takes effect immediately. When enabled,
 60 seconds without LVGL input blanks the framebuffer. Touch or keyboard activity
 unblanks it and forces a full screen/overlay redraw. The wake input is also
 delivered to the UI. `SCREENSAVER_IDLE_MS` in `src/ui.c` sets the timeout. HDMI
 audio may be interrupted while the display is blanked. The default is off.
-
-The Settings button **Sleep screen for 5 seconds** blanks the selected framebuffer
-using `FBIOBLANK`, then automatically unblanks it and forces a full LVGL redraw,
-including overlay layers. The LVGL event loop continues running during the test.
-The process needs permission to control `LV_LINUX_FBDEV_DEVICE` (default
-`/dev/fb0`). Failures appear below the button and in stderr. Normal application
-shutdown also attempts to unblank an ongoing test; SIGKILL cannot perform cleanup.
-Hardware input may wake the console early, and HDMI audio may stop while blanked.
 
 Messaging contains a vertically scrollable history and a fixed single-line
 entry field. Enter appends the typed message locally, clears the entry, and

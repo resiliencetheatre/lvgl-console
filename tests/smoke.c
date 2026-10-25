@@ -49,7 +49,8 @@ int main(void)
     lv_area_t ptt_area, logo_area;
     lv_obj_get_coords(ptt, &ptt_area);
     lv_obj_get_coords(logo, &logo_area);
-    if (abs((ptt_area.y1 + ptt_area.y2) - (logo_area.y1 + logo_area.y2)) > 2 ||
+    if ((logo_area.y1 + logo_area.y2) / 2 < ptt_area.y1 + lv_area_get_height(&ptt_area) * 2 / 3 ||
+        logo_area.y2 >= ptt_area.y2 ||
         abs((ptt_area.x1 + ptt_area.x2) - (logo_area.x1 + logo_area.x2)) > 2)
         return EXIT_FAILURE;
     lv_obj_t *bar = lv_obj_get_child(screen, 1);
