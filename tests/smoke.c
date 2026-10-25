@@ -32,6 +32,7 @@ int main(void)
     lv_obj_t *input = app_ui_create(screen);
     lv_group_t *group = lv_group_create();
     lv_group_add_obj(group, input);
+    app_ui_add_settings_to_group(group);
     lv_obj_t *tabs = lv_obj_get_child(screen, 0);
     lv_timer_handler();
     lv_tick_inc(500);
@@ -102,6 +103,14 @@ int main(void)
         }
     }
     lv_group_focus_obj(input);
+    if (lv_obj_get_style_border_width(input, LV_PART_CURSOR) != 2 ||
+        lv_obj_get_style_border_opa(input, LV_PART_CURSOR) != LV_OPA_COVER ||
+        lv_obj_get_style_border_side(input, LV_PART_CURSOR) != LV_BORDER_SIDE_LEFT ||
+        !lv_color_eq(lv_obj_get_style_border_color(input, LV_PART_CURSOR),
+                     lv_color_hex(0x39FF14))) {
+        fprintf(stderr, "Chat cursor must be a visible green caret\n");
+        return EXIT_FAILURE;
+    }
     /* Feed real evdev records through the keyboard reader without hardware. */
     const struct input_event events[] = {
         {.type = EV_KEY, .code = KEY_LEFTSHIFT, .value = 1},
@@ -121,7 +130,7 @@ int main(void)
         return EXIT_FAILURE;
     char path[64];
     snprintf(path, sizeof(path), "/proc/self/fd/%d", fileno(stream));
-    lv_indev_t *keyboard = app_keyboard_create(path, group, tabs);
+    lv_indev_t *keyboard = app_keyboard_create(path, group);
     if (!keyboard) return EXIT_FAILURE;
     lv_indev_set_display(keyboard, display);
     lv_indev_read(keyboard);
@@ -129,45 +138,55 @@ int main(void)
         fprintf(stderr, "Physical keyboard text entry failed\n");
         return EXIT_FAILURE;
     }
-    lv_tabview_set_active(tabs, 0, LV_ANIM_OFF);
-    const struct {
-        unsigned short code;
-        int value;
-        uint32_t tab;
-    } navigation[] = {
-        {KEY_RIGHT, 1, 1}, {KEY_RIGHT, 2, 1}, {KEY_RIGHT, 0, 1},
-        {KEY_RIGHT, 1, 2}, {KEY_RIGHT, 0, 2},
-        {KEY_RIGHT, 1, 0}, {KEY_RIGHT, 0, 0},
-        {KEY_LEFT, 1, 2}, {KEY_LEFT, 2, 2}, {KEY_LEFT, 0, 2},
-        {KEY_LEFT, 1, 1}, {KEY_LEFT, 0, 1},
-        {KEY_LEFT, 1, 0}, {KEY_LEFT, 0, 0},
+    lv_tabview_set_active(tabs, 1, LV_ANIM_OFF);
+    const struct { unsigned short code; unsigned cursor; } arrows[] = {
+        {KEY_LEFT, 1}, {KEY_LEFT, 0}, {KEY_RIGHT, 1}, {KEY_RIGHT, 2}
     };
-    uint32_t cursor = lv_textarea_get_cursor_pos(input);
-    for (unsigned i = 0; i < sizeof(navigation) / sizeof(navigation[0]); ++i) {
+    for (unsigned i = 0; i < sizeof(arrows) / sizeof(arrows[0]); ++i) {
         const struct input_event packet[] = {
-            {.type = EV_MSC, .code = MSC_SCAN, .value = 0x7004f},
-            {.type = EV_KEY, .code = navigation[i].code, .value = navigation[i].value},
-            {.type = EV_SYN, .code = SYN_REPORT},
+            {.type = EV_KEY, .code = arrows[i].code, .value = 1},
+            {.type = EV_KEY, .code = arrows[i].code, .value = 0},
         };
         if (fwrite(packet, sizeof(packet), 1, stream) != 1 || fflush(stream))
             return EXIT_FAILURE;
         lv_indev_read(keyboard);
-        lv_refr_now(display);
-        if (lv_tabview_get_tab_active(tabs) != navigation[i].tab ||
-            lv_textarea_get_cursor_pos(input) != cursor ||
-            strcmp(lv_textarea_get_text(input), "Hi") != 0) {
-            fprintf(stderr, "Arrow navigation failed at event %u\n", i);
+        if (lv_tabview_get_tab_active(tabs) != 1 ||
+            lv_textarea_get_cursor_pos(input) != arrows[i].cursor)
             return EXIT_FAILURE;
-        }
-        lv_obj_t *selected = lv_obj_get_child(tab_bar, navigation[i].tab);
-        if (!lv_color_eq(lv_obj_get_style_bg_color(selected, LV_PART_MAIN),
-                         lv_color_hex(0x103D08))) {
-            fprintf(stderr, "Arrow navigation lost the selected tab fill\n");
-            return EXIT_FAILURE;
-        }
     }
+    const struct input_event enter[] = {
+        {.type = EV_KEY, .code = KEY_ENTER, .value = 1},
+        {.type = EV_KEY, .code = KEY_ENTER, .value = 0},
+    };
+    if (fwrite(enter, sizeof(enter), 1, stream) != 1 || fflush(stream))
+        return EXIT_FAILURE;
+    lv_indev_read(keyboard);
+    lv_obj_t *messaging = lv_obj_get_child(content, 1);
+    lv_obj_t *history = lv_obj_get_child(messaging, 0);
+    if (lv_obj_get_child_count(history) != 1 ||
+        strcmp(lv_label_get_text(lv_obj_get_child(history, 0)), "Hi") ||
+        lv_textarea_get_text(input)[0]) return EXIT_FAILURE;
+    lv_textarea_set_text(input, "   ");
+    lv_obj_send_event(input, LV_EVENT_READY, NULL);
+    if (lv_obj_get_child_count(history) != 1) return EXIT_FAILURE;
+    for (unsigned i = 0; i < 110; ++i) {
+        char message[160];
+        snprintf(message, sizeof(message), "Message %u: This is a longer local demonstration message to exercise wrapping and scrolling in the chat history.", i);
+        lv_textarea_set_text(input, message);
+        lv_obj_send_event(input, LV_EVENT_READY, NULL);
+    }
+    lv_obj_update_layout(screen);
+    if (lv_obj_get_child_count(history) != 100 || lv_obj_get_scroll_y(history) <= 0)
+        return EXIT_FAILURE;
+    lv_obj_scroll_to_y(history, 0, LV_ANIM_OFF);
+    if (lv_obj_get_scroll_y(history) != 0 || lv_obj_get_scroll_bottom(history) <= 0)
+        return EXIT_FAILURE;
+    lv_area_t input_area, bar_area;
+    lv_obj_get_coords(input, &input_area);
+    lv_obj_get_coords(bar, &bar_area);
+    if (input_area.y2 >= bar_area.y1) return EXIT_FAILURE;
     fclose(stream);
     lv_deinit();
-    puts("Logo, tabs, keyboard text entry and arrow navigation passed");
+    puts("Logo, tabs, messaging history, text cursor and scrolling passed");
     return EXIT_SUCCESS;
 }

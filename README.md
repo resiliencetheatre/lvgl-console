@@ -3,7 +3,8 @@
 Small LVGL 9.6.0 console for the Raspberry Pi 4 Linux framebuffer. Uses the
 fbdev/evdev setup from lvgl-video and the logo/tab conventions from lvgl-com.
 The first tab, PTT, opens at startup and shows link.png centered in its content
-area. Settings contains keyboard entry and a display sleep test.
+area. Messaging provides a local chat demo; Settings edits PTT identities and
+screen-saver preferences and contains a display sleep test.
 
 The UI uses black backgrounds and neon green (`#39FF14`) text, borders,
 scrollbars, and logo. Active tab titles and pressed buttons use a dim green
@@ -113,6 +114,28 @@ shows `PTT unavailable`. The state file changes on activity transitions, not as
 a periodic heartbeat, so idle state does not expire. Socket availability does
 not prove server connectivity or client responsiveness.
 
+Settings loads `/etc/default/udpptt`. The three fields edit `UDPPTT_TXID`
+(1–31 characters), `UDPPTT_DPI_ID` (1–63 characters), and `UDPPTT_PREAMBLE_ID`
+(exactly five uppercase A–Z letters). IDs accept letters, digits, dots,
+underscores, and hyphens. Touch a field to focus it and use the physical
+keyboard; Tab advances through the focus group. No virtual keyboard is opened.
+
+**Save** validates the fields and atomically updates these settings while
+preserving other entries and comments, including server, audio device, and key.
+The existing file's permissions and (when running as root) ownership are
+preserved. Errors appear below Save. The file must already exist and the process
+must have permission to replace it in `/etc/default`. No shell commands are run
+to load or save configuration. Restart `udpptt.service` to apply identity changes;
+saving does not interrupt an active call or regenerate DPI keys. Install the
+updated PocketTerm service, which reads all three identity environment variables.
+
+**Screen saver (60 seconds)** is saved as `UDPPTT_SCREENSAVER=0` or `1` in the
+same file. After Save, this preference takes effect immediately. When enabled,
+60 seconds without LVGL input blanks the framebuffer. Touch or keyboard activity
+unblanks it and forces a full screen/overlay redraw. The wake input is also
+delivered to the UI. `SCREENSAVER_IDLE_MS` in `src/ui.c` sets the timeout. HDMI
+audio may be interrupted while the display is blanked. The default is off.
+
 The Settings button **Sleep screen for 5 seconds** blanks the selected framebuffer
 using `FBIOBLANK`, then automatically unblanks it and forces a full LVGL redraw,
 including overlay layers. The LVGL event loop continues running during the test.
@@ -121,9 +144,13 @@ The process needs permission to control `LV_LINUX_FBDEV_DEVICE` (default
 shutdown also attempts to unblank an ongoing test; SIGKILL cannot perform cleanup.
 Hardware input may wake the console early, and HDMI audio may stop while blanked.
 
-Settings contains a labeled single-line text field (128 characters maximum).
-Tap it and type on an external keyboard. No on-screen keyboard is created or
-shown on focus. Text is for demonstration only and is not saved.
+Messaging contains a vertically scrollable history and a fixed single-line
+entry field. Enter appends the typed message locally, clears the entry, and
+scrolls to the newest message. Blank messages are ignored. Messages wrap within
+the history; input is limited to 512 characters and the latest 100 messages are
+retained in memory. Nothing is sent over the network or saved across restarts.
+The append callback in `src/ui.c` is the placeholder for a future chat backend.
+No on-screen keyboard is created.
 
 At startup the first `/dev/input/by-id/*-event-kbd` device is opened, falling
 back to `/dev/input/keyboard`. Override this with
@@ -132,10 +159,9 @@ starting the app. The demo uses a US layout with Shift, Caps Lock, Backspace,
 Delete, Home and End; international layouts and hotplug are not
 implemented. Touch input continues to use `LV_LINUX_EVDEV_DEVICE`.
 
-Left/Right switches tabs globally, including while the Settings text field is
-focused. Navigation wraps at either end (PTT / Status / Settings), once per
-press; holding an arrow does not cycle repeatedly. The selected title keeps
-its dim green fill. Use Home/End to move the text cursor.
+Left/Right moves the cursor in the text entry; Home/End moves to the start/end.
+Arrow keys no longer switch tabs. Select PTT / Messaging / Settings by touch.
+The focused entry does not automatically scroll away from PTT at startup.
 
 For the Pico keyboard shown as `/dev/input/event1`, start with:
 

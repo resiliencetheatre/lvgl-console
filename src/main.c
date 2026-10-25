@@ -56,8 +56,8 @@ int main(int argc, char **argv)
     lv_group_t *keyboard_group = lv_group_create();
     lv_obj_t *text_input = app_ui_create(lv_display_get_screen_active(display));
     lv_group_add_obj(keyboard_group, text_input);
-    lv_obj_t *tabs = lv_obj_get_child(lv_display_get_screen_active(display), 0);
-    lv_indev_t *keyboard = app_keyboard_create(getenv("LV_LINUX_KEYBOARD_DEVICE"), keyboard_group, tabs);
+    app_ui_add_settings_to_group(keyboard_group);
+    lv_indev_t *keyboard = app_keyboard_create(getenv("LV_LINUX_KEYBOARD_DEVICE"), keyboard_group);
     if (keyboard) lv_indev_set_display(keyboard, display);
     while (running) {
         /* fbdev supplies LVGL's monotonic tick callback. */

@@ -1,6 +1,8 @@
 #include "ui.h"
 #include "ping_status.h"
 #include "ptt_status.h"
+#include "settings.h"
+#include <errno.h>
 #include <string.h>
 #include <fcntl.h>
 #include <linux/fb.h>
@@ -117,6 +119,72 @@ static void create_ping_panel(lv_obj_t *screen)
     lv_obj_add_event_cb(bar, delete_ping_panel, LV_EVENT_DELETE, panel);
 }
 
+#define SCREENSAVER_IDLE_MS 60000
+static app_settings saved_settings;
+static lv_obj_t *settings_fields[3], *saver_checkbox, *save_button, *save_feedback;
+static bool saver_sleeping;
+static uint32_t saver_last_idle;
+
+static void saver_tick(lv_timer_t *timer)
+{
+    lv_display_t *display = lv_timer_get_user_data(timer);
+    uint32_t idle = lv_display_get_inactive_time(display);
+    if (saver_sleeping) {
+        if (idle < saver_last_idle || !saved_settings.screensaver) {
+            app_ui_resume_display();
+            saver_sleeping = false;
+        }
+        saver_last_idle = idle;
+        return;
+    }
+    if (!saved_settings.screensaver || sleep_fd >= 0 || idle < SCREENSAVER_IDLE_MS) return;
+    const char *path = getenv("LV_LINUX_FBDEV_DEVICE");
+    if (!path || !*path) path = "/dev/fb0";
+    sleep_fd = open(path, O_RDWR | O_CLOEXEC);
+    if (sleep_fd < 0 || ioctl(sleep_fd, FBIOBLANK, FB_BLANK_POWERDOWN) < 0) {
+        perror("Screen saver blank");
+        if (sleep_fd >= 0) close(sleep_fd);
+        sleep_fd = -1;
+        lv_display_trigger_activity(display); /* Back off before retrying. */
+        return;
+    }
+    saver_sleeping = true;
+    saver_last_idle = idle;
+}
+
+static void delete_saver_timer(lv_event_t *event)
+{
+    lv_timer_delete(lv_event_get_user_data(event));
+}
+
+static void save_settings(lv_event_t *event)
+{
+    (void)event;
+    app_settings next = {0};
+    snprintf(next.txid, sizeof(next.txid), "%s", lv_textarea_get_text(settings_fields[0]));
+    snprintf(next.dpi_id, sizeof(next.dpi_id), "%s", lv_textarea_get_text(settings_fields[1]));
+    snprintf(next.preamble, sizeof(next.preamble), "%s", lv_textarea_get_text(settings_fields[2]));
+    next.screensaver = lv_obj_has_state(saver_checkbox, LV_STATE_CHECKED);
+    if (!app_settings_valid(&next)) {
+        lv_label_set_text(save_feedback, "IDs: letters, digits, . _ -; preamble: exactly 5 A-Z letters.");
+        return;
+    }
+    if (app_settings_save("/etc/default/udpptt", &next)) {
+        lv_label_set_text_fmt(save_feedback, "Save failed: %s", strerror(errno));
+        return;
+    }
+    saved_settings = next;
+    lv_display_trigger_activity(lv_obj_get_display(save_feedback));
+    lv_label_set_text(save_feedback, "Saved. Restart udpptt.service to apply PTT IDs.");
+}
+
+void app_ui_add_settings_to_group(lv_group_t *group)
+{
+    for (unsigned i = 0; i < 3; ++i) lv_group_add_obj(group, settings_fields[i]);
+    lv_group_add_obj(group, saver_checkbox);
+    lv_group_add_obj(group, save_button);
+}
+
 /* Also called before LVGL shuts down, so a normal exit cannot leave HDMI off. */
 void app_ui_resume_display(void)
 {
@@ -220,8 +288,19 @@ static void apply_neon_theme(lv_obj_t *obj)
     }
     if (lv_obj_check_type(obj, &lv_textarea_class)) {
         lv_obj_set_style_text_color(obj, green, LV_PART_TEXTAREA_PLACEHOLDER);
-        lv_obj_set_style_bg_color(obj, green, LV_PART_CURSOR);
-        lv_obj_set_style_border_color(obj, green, LV_PART_CURSOR);
+        /* Cursor geometry/opacity must be explicit, not dependent on the
+         * theme's focus-only cursor style. Match its focused selectors too. */
+        for (unsigned i = 0; i < sizeof(states) / sizeof(states[0]); ++i) {
+            lv_style_selector_t cursor = LV_PART_CURSOR | states[i];
+            lv_obj_set_style_bg_opa(obj, LV_OPA_TRANSP, cursor);
+            lv_obj_set_style_border_color(obj, green, cursor);
+            lv_obj_set_style_border_width(obj, 2, cursor);
+            lv_obj_set_style_border_side(obj, LV_BORDER_SIDE_LEFT, cursor);
+            lv_obj_set_style_border_opa(obj, LV_OPA_COVER, cursor);
+            lv_obj_set_style_opa(obj, LV_OPA_COVER, cursor);
+            lv_obj_set_style_pad_all(obj, 0, cursor);
+            lv_obj_set_style_anim_duration(obj, 0, cursor);
+        }
         lv_obj_set_style_bg_color(obj, green, LV_PART_SELECTED);
         lv_obj_set_style_text_color(obj, lv_color_black(), LV_PART_SELECTED);
     }
@@ -234,13 +313,37 @@ static void apply_neon_theme(lv_obj_t *obj)
         apply_neon_theme(lv_obj_get_child(obj, i));
 }
 
+/* Local-only chat demo. Replace this append callback when a backend is chosen. */
+static void append_chat_message(lv_event_t *event)
+{
+    lv_obj_t *input = lv_event_get_target_obj(event);
+    lv_obj_t *history = lv_event_get_user_data(event);
+    const char *text = lv_textarea_get_text(input);
+    bool nonempty = false;
+    for (const char *p = text; *p; ++p) {
+        if (*p != ' ' && *p != '\t' && *p != '\r' && *p != '\n') nonempty = true;
+    }
+    if (!nonempty) return;
+    /* Bound memory usage while retaining enough messages to test scrolling. */
+    if (lv_obj_get_child_count(history) >= 100)
+        lv_obj_delete(lv_obj_get_child(history, 0));
+    lv_obj_t *message = lv_label_create(history);
+    lv_obj_set_width(message, LV_PCT(100));
+    lv_label_set_long_mode(message, LV_LABEL_LONG_MODE_WRAP);
+    lv_label_set_text(message, text);
+    apply_neon_theme(message);
+    lv_textarea_set_text(input, "");
+    lv_obj_update_layout(history);
+    lv_obj_scroll_to_view(message, LV_ANIM_OFF);
+}
+
 lv_obj_t *app_ui_create(lv_obj_t *screen)
 {
     lv_obj_t *tabs = lv_tabview_create(screen);
     lv_tabview_set_tab_bar_size(tabs, 48);
     lv_obj_set_size(tabs, LV_PCT(100), lv_obj_get_height(screen) - STATUS_BAR_HEIGHT);
     lv_obj_t *comm = lv_tabview_add_tab(tabs, "PTT");
-    lv_obj_t *status = lv_tabview_add_tab(tabs, "Status");
+    lv_obj_t *status = lv_tabview_add_tab(tabs, "Messaging");
     lv_obj_t *settings = lv_tabview_add_tab(tabs, "Settings");
     lv_obj_set_flex_flow(comm, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(comm, LV_FLEX_ALIGN_CENTER,
@@ -250,22 +353,66 @@ lv_obj_t *app_ui_create(lv_obj_t *screen)
     lv_obj_set_size(logo, LV_PCT(100), 101);
     lv_image_set_inner_align(logo, LV_IMAGE_ALIGN_CONTAIN);
 
-    lv_obj_t *status_note = lv_label_create(status);
-    lv_label_set_text(status_note, "Connectivity and speech activity are shown below.");
-    lv_obj_set_width(status_note, LV_PCT(100));
-    lv_obj_t *label = lv_label_create(settings);
-    lv_obj_set_flex_flow(settings, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(settings, 16, 0);
-    lv_label_set_text(label, "Keyboard text entry");
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_24, 0);
-    lv_obj_t *input = lv_textarea_create(settings);
-    /* Adding this field to the keyboard group must not scroll to Settings. */
+    lv_obj_set_flex_flow(status, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(status, 8, 0);
+    lv_obj_set_scrollable(status, false);
+    lv_obj_t *history = lv_obj_create(status);
+    lv_obj_set_width(history, LV_PCT(100));
+    lv_obj_set_height(history, 0);
+    lv_obj_set_flex_grow(history, 1);
+    lv_obj_set_flex_flow(history, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_scroll_dir(history, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(history, LV_SCROLLBAR_MODE_AUTO);
+    lv_obj_set_style_pad_row(history, 10, 0);
+    lv_obj_t *input = lv_textarea_create(status);
+    /* Keyboard focus must not scroll away from the initial PTT tab. */
     lv_obj_set_scroll_on_focus(input, false);
     lv_obj_set_width(input, LV_PCT(100));
     lv_textarea_set_one_line(input, true);
-    lv_textarea_set_max_length(input, 128);
-    lv_textarea_set_placeholder_text(input, "Type using your external keyboard");
+    lv_textarea_set_max_length(input, 512);
+    lv_textarea_set_placeholder_text(input, "Type a message; Enter to add locally");
     lv_textarea_set_text(input, "");
+    lv_obj_add_event_cb(input, append_chat_message, LV_EVENT_READY, history);
+    lv_obj_set_flex_flow(settings, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(settings, 16, 0);
+    int loaded = app_settings_load("/etc/default/udpptt", &saved_settings);
+    const char *field_labels[] = {"PTT transmit ID", "PTT dpi ID", "PTT preamble ID\n(5 letters only)"};
+    const char *values[] = {saved_settings.txid, saved_settings.dpi_id, saved_settings.preamble};
+    for (unsigned i = 0; i < 3; ++i) {
+        lv_obj_t *row = lv_obj_create(settings);
+        lv_obj_set_size(row, LV_PCT(100), 52);
+        lv_obj_set_style_pad_all(row, 0, 0);
+        lv_obj_set_style_border_width(row, 0, 0);
+        lv_obj_set_scrollable(row, false);
+        lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        settings_fields[i] = lv_textarea_create(row);
+        lv_obj_set_size(settings_fields[i], 210, 44);
+        lv_obj_set_scroll_on_focus(settings_fields[i], false);
+        lv_textarea_set_one_line(settings_fields[i], true);
+        lv_textarea_set_max_length(settings_fields[i], i == 2 ? 5 : i == 0 ? 31 : 63);
+        lv_textarea_set_accepted_chars(settings_fields[i], i == 2 ? "ABCDEFGHIJKLMNOPQRSTUVWXYZ" :
+            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-");
+        lv_textarea_set_text(settings_fields[i], values[i]);
+        lv_obj_t *caption = lv_label_create(row);
+        lv_label_set_text(caption, field_labels[i]);
+    }
+    saver_checkbox = lv_checkbox_create(settings);
+    lv_checkbox_set_text(saver_checkbox, "Screen saver (60 seconds)");
+    if (saved_settings.screensaver) lv_obj_add_state(saver_checkbox, LV_STATE_CHECKED);
+    lv_obj_set_scroll_on_focus(saver_checkbox, false);
+    save_button = lv_button_create(settings);
+    lv_obj_set_size(save_button, 110, 40);
+    lv_obj_set_scroll_on_focus(save_button, false);
+    lv_obj_t *save_label = lv_label_create(save_button);
+    lv_label_set_text(save_label, "Save");
+    lv_obj_center(save_label);
+    lv_obj_add_event_cb(save_button, save_settings, LV_EVENT_CLICKED, NULL);
+    save_feedback = lv_label_create(settings);
+    lv_obj_set_width(save_feedback, LV_PCT(100));
+    lv_label_set_text(save_feedback, loaded ? "Configuration unavailable; defaults shown." : "");
+    lv_timer_t *saver_timer = lv_timer_create(saver_tick, 250, lv_obj_get_display(screen));
+    if (saver_timer) lv_obj_add_event_cb(screen, delete_saver_timer, LV_EVENT_DELETE, saver_timer);
     sleep_button = lv_button_create(settings);
     lv_obj_set_size(sleep_button, LV_SIZE_CONTENT, 60);
     lv_obj_t *sleep_label = lv_label_create(sleep_button);
@@ -274,8 +421,7 @@ lv_obj_t *app_ui_create(lv_obj_t *screen)
     lv_obj_add_event_cb(sleep_button, sleep_display, LV_EVENT_CLICKED, NULL);
     sleep_status = lv_label_create(settings);
     lv_label_set_text(sleep_status, "Wakes automatically and redraws the screen.");
-    /* Only this field belongs to the physical keyboard's focus group.
-     * LVGL does not open a virtual keyboard unless the application creates one. */
+    /* No virtual keyboard is created. */
     lv_tabview_set_active(tabs, 0, LV_ANIM_OFF);
     create_ping_panel(screen);
     apply_neon_theme(screen);
