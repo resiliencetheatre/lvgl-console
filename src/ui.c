@@ -2,6 +2,8 @@
 #include "ping_status.h"
 #include "ptt_status.h"
 #include "settings.h"
+#include "volume.h"
+#include <alsa/asoundlib.h>
 #include <errno.h>
 #include <math.h>
 #include <string.h>
@@ -272,6 +274,7 @@ static void create_ping_panel(lv_obj_t *screen)
 #define SCREENSAVER_IDLE_MS 60000
 static app_settings saved_settings;
 static lv_obj_t *settings_fields[3], *saver_checkbox, *save_button, *save_feedback;
+static lv_obj_t *server_input, *operation_modes[4];
 static bool saver_sleeping;
 static uint32_t saver_last_idle;
 
@@ -314,9 +317,10 @@ static void save_settings(lv_event_t *event)
     snprintf(next.txid, sizeof(next.txid), "%s", lv_textarea_get_text(settings_fields[0]));
     snprintf(next.dpi_id, sizeof(next.dpi_id), "%s", lv_textarea_get_text(settings_fields[1]));
     snprintf(next.preamble, sizeof(next.preamble), "%s", lv_textarea_get_text(settings_fields[2]));
+    snprintf(next.server, sizeof(next.server), "%s", lv_textarea_get_text(server_input));
     next.screensaver = lv_obj_has_state(saver_checkbox, LV_STATE_CHECKED);
     if (!app_settings_valid(&next)) {
-        lv_label_set_text(save_feedback, "IDs: letters, digits, . _ -; preamble: exactly 5 A-Z letters.");
+        lv_label_set_text(save_feedback, "Invalid settings: check IDs, five-letter preamble and server address.");
         return;
     }
     if (app_settings_save("/etc/default/udpptt", &next)) {
@@ -325,12 +329,128 @@ static void save_settings(lv_event_t *event)
     }
     saved_settings = next;
     lv_display_trigger_activity(lv_obj_get_display(save_feedback));
-    lv_label_set_text(save_feedback, "Saved. Restart udpptt.service to apply PTT IDs.");
+    lv_label_set_text(save_feedback, "Saved. Restart udpptt.service to apply IDs/server.");
+}
+
+static lv_obj_t *volume_rollers[2];
+static bool volume_updating;
+static void volume_event(lv_event_t *event)
+{
+    if (volume_updating) return;
+    unsigned index = (unsigned)(uintptr_t)lv_event_get_user_data(event);
+    lv_obj_t *roller = volume_rollers[index];
+    int value = lv_roller_get_selected(roller) * 5;
+    int rc = app_volume_set(index == 0, value);
+    if (rc < 0) lv_label_set_text_fmt(save_feedback, "Volume failed: %s", snd_strerror(rc));
+    int actual;
+    if (!app_volume_get(index == 0, &actual) && actual != value) {
+        volume_updating = true;
+        lv_roller_set_selected(roller, (actual + 2) / 5, LV_ANIM_OFF);
+        volume_updating = false;
+    }
+}
+
+static void create_volume_controls(lv_obj_t *settings)
+{
+    lv_obj_t *row = lv_obj_create(settings);
+    lv_obj_set_size(row, LV_PCT(100), LV_SIZE_CONTENT);
+    lv_obj_set_style_pad_all(row, 0, 0);
+    lv_obj_set_style_border_width(row, 0, 0);
+    lv_obj_set_scrollable(row, false);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_t *audio_title = lv_label_create(row);
+    lv_label_set_text(audio_title, "Audio volume");
+    lv_obj_set_style_text_font(audio_title, &lv_font_montserrat_20, 0);
+    for (unsigned i = 0; i < 2; ++i) {
+        lv_obj_t *column = lv_obj_create(row);
+        lv_obj_set_size(column, 116, LV_SIZE_CONTENT);
+        lv_obj_set_style_pad_all(column, 0, 0);
+        lv_obj_set_style_border_width(column, 0, 0);
+        lv_obj_set_scrollable(column, false);
+        lv_obj_set_flex_flow(column, LV_FLEX_FLOW_COLUMN);
+        lv_obj_set_style_pad_row(column, 8, 0);
+        lv_obj_t *caption = lv_label_create(column);
+        lv_label_set_text(caption, i == 0 ? "Input" : "Output");
+        lv_obj_set_style_text_font(caption, &lv_font_montserrat_20, 0);
+        int value = 0;
+        bool available = app_volume_get(i == 0, &value) == 0;
+        volume_rollers[i] = lv_roller_create(column);
+        lv_obj_set_width(volume_rollers[i], LV_PCT(100));
+        lv_obj_set_scroll_on_focus(volume_rollers[i], false);
+        lv_obj_set_scroll_chain(volume_rollers[i], false);
+        lv_obj_set_gesture_bubble(volume_rollers[i], false);
+        lv_roller_set_options(volume_rollers[i],
+            "0%\n5%\n10%\n15%\n20%\n25%\n30%\n35%\n40%\n45%\n50%\n55%\n60%\n65%\n70%\n75%\n80%\n85%\n90%\n95%\n100%",
+            LV_ROLLER_MODE_NORMAL);
+        lv_roller_set_visible_row_count(volume_rollers[i], 3);
+        lv_roller_set_selected(volume_rollers[i], (value + 2) / 5, LV_ANIM_OFF);
+        if (!available) {
+            lv_label_set_text(caption, i == 0 ? "Input: N/A" : "Output: N/A");
+            lv_obj_add_state(volume_rollers[i], LV_STATE_DISABLED);
+        }
+        lv_obj_add_event_cb(volume_rollers[i], volume_event, LV_EVENT_VALUE_CHANGED, (void *)(uintptr_t)i);
+    }
+}
+
+static void select_operation_mode(lv_event_t *event)
+{
+    lv_obj_t *selected = lv_event_get_target_obj(event);
+    for (unsigned i = 0; i < 4; ++i) {
+        if (operation_modes[i] == selected) lv_obj_add_state(operation_modes[i], LV_STATE_CHECKED);
+        else lv_obj_remove_state(operation_modes[i], LV_STATE_CHECKED);
+    }
+    /* UI-only choice: intentionally no client commands or configuration writes. */
+}
+
+static void create_operation_modes(lv_obj_t *settings)
+{
+    lv_obj_t *title = lv_label_create(settings);
+    lv_label_set_text(title, "PTT Operation mode");
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_20, 0);
+    const char *names[] = {"WAN", "DARK FIBER", "DATA DIODE (TX)", "DATA DIODE (RX)"};
+    for (unsigned row_index = 0; row_index < 2; ++row_index) {
+        lv_obj_t *row = lv_obj_create(settings);
+        lv_obj_set_size(row, LV_PCT(100), 56);
+        lv_obj_set_style_pad_all(row, 0, 0);
+        lv_obj_set_style_border_width(row, 0, 0);
+        lv_obj_set_scrollable(row, false);
+        lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+        lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        for (unsigned col = 0; col < 2; ++col) {
+            unsigned i = row_index * 2 + col;
+            lv_obj_t *cell = lv_obj_create(row);
+            lv_obj_set_size(cell, LV_PCT(49), LV_PCT(100));
+            lv_obj_set_style_pad_all(cell, 0, 0);
+            lv_obj_set_style_border_width(cell, 0, 0);
+            lv_obj_set_scrollable(cell, false);
+            lv_obj_set_flex_flow(cell, LV_FLEX_FLOW_ROW);
+            lv_obj_set_flex_align(cell, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+            operation_modes[i] = lv_checkbox_create(cell);
+            lv_checkbox_set_text(operation_modes[i], names[i]);
+            lv_obj_set_scroll_on_focus(operation_modes[i], false);
+            lv_obj_set_style_radius(operation_modes[i], LV_RADIUS_CIRCLE, LV_PART_INDICATOR);
+            lv_obj_add_event_cb(operation_modes[i], select_operation_mode, LV_EVENT_VALUE_CHANGED, NULL);
+            if (i == 0) {
+                lv_obj_add_state(operation_modes[i], LV_STATE_CHECKED);
+                server_input = lv_textarea_create(cell);
+                lv_obj_set_size(server_input, 185, 44);
+                lv_obj_set_scroll_on_focus(server_input, false);
+                lv_textarea_set_one_line(server_input, true);
+                lv_textarea_set_max_length(server_input, 255);
+                lv_textarea_set_placeholder_text(server_input, "Server IP");
+                lv_textarea_set_text(server_input, saved_settings.server);
+            }
+        }
+    }
 }
 
 void app_ui_add_settings_to_group(lv_group_t *group)
 {
     for (unsigned i = 0; i < 3; ++i) lv_group_add_obj(group, settings_fields[i]);
+    for (unsigned i = 0; i < 2; ++i) lv_group_add_obj(group, volume_rollers[i]);
+    for (unsigned i = 0; i < 4; ++i) lv_group_add_obj(group, operation_modes[i]);
+    lv_group_add_obj(group, server_input);
     lv_group_add_obj(group, saver_checkbox);
     lv_group_add_obj(group, save_button);
 }
@@ -391,6 +511,15 @@ static void apply_neon_theme(lv_obj_t *obj)
         lv_obj_set_style_bg_opa(obj, LV_OPA_COVER, LV_STATE_PRESSED);
         lv_obj_set_style_shadow_width(obj, 12, LV_STATE_PRESSED);
         lv_obj_set_style_shadow_opa(obj, LV_OPA_50, LV_STATE_PRESSED);
+    }
+    if (lv_obj_check_type(obj, &lv_roller_class)) {
+        lv_obj_set_style_border_width(obj, 1, 0);
+        lv_obj_set_style_border_side(obj, LV_BORDER_SIDE_FULL, 0);
+        lv_obj_set_style_border_opa(obj, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_color(obj, lv_color_hex(DIM_GREEN), LV_PART_SELECTED);
+        lv_obj_set_style_bg_opa(obj, LV_OPA_COVER, LV_PART_SELECTED);
+        lv_obj_set_style_text_color(obj, green, LV_PART_SELECTED);
+        lv_obj_set_style_border_color(obj, green, LV_PART_SELECTED);
     }
     if (lv_obj_check_type(obj, &lv_textarea_class)) {
         lv_obj_set_style_text_color(obj, green, LV_PART_TEXTAREA_PLACEHOLDER);
@@ -491,12 +620,16 @@ lv_obj_t *app_ui_create(lv_obj_t *screen)
     lv_textarea_set_text(input, "");
     lv_obj_add_event_cb(input, append_chat_message, LV_EVENT_READY, history);
     lv_obj_set_flex_flow(settings, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(settings, 16, 0);
+    lv_obj_set_scrollable(settings, true);
+    lv_obj_set_scroll_dir(settings, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(settings, LV_SCROLLBAR_MODE_AUTO);
+    lv_obj_set_scroll_chain(settings, false);
+    lv_obj_set_style_pad_row(settings, 10, 0);
     int loaded = app_settings_load("/etc/default/udpptt", &saved_settings);
     const char *field_labels[] = {"Transmit ID", "dpi ID", "preamble ID"};
     const char *values[] = {saved_settings.txid, saved_settings.dpi_id, saved_settings.preamble};
     lv_obj_t *fields_row = lv_obj_create(settings);
-    lv_obj_set_size(fields_row, LV_PCT(100), 150);
+    lv_obj_set_size(fields_row, LV_PCT(100), 112);
     lv_obj_set_style_pad_all(fields_row, 0, 0);
     lv_obj_set_style_border_width(fields_row, 0, 0);
     lv_obj_set_scrollable(fields_row, false);
@@ -527,11 +660,23 @@ lv_obj_t *app_ui_create(lv_obj_t *screen)
             lv_label_set_text(hint, "(5 letters only)");
         }
     }
+    create_volume_controls(settings);
+    create_operation_modes(settings);
+    lv_obj_t *system_title = lv_label_create(settings);
+    lv_label_set_text(system_title, "System settings");
+    lv_obj_set_style_text_font(system_title, &lv_font_montserrat_20, 0);
     saver_checkbox = lv_checkbox_create(settings);
     lv_checkbox_set_text(saver_checkbox, "Screen saver");
     if (saved_settings.screensaver) lv_obj_add_state(saver_checkbox, LV_STATE_CHECKED);
     lv_obj_set_scroll_on_focus(saver_checkbox, false);
-    save_button = lv_button_create(settings);
+    lv_obj_t *actions = lv_obj_create(settings);
+    lv_obj_set_size(actions, LV_PCT(100), 48);
+    lv_obj_set_style_pad_all(actions, 0, 0);
+    lv_obj_set_style_border_width(actions, 0, 0);
+    lv_obj_set_scrollable(actions, false);
+    lv_obj_set_flex_flow(actions, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(actions, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    save_button = lv_button_create(actions);
     lv_obj_set_size(save_button, 110, 40);
     lv_obj_set_scroll_on_focus(save_button, false);
     lv_obj_t *save_label = lv_label_create(save_button);

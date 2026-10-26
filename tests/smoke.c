@@ -104,6 +104,32 @@ int main(void)
         }
     }
     lv_group_focus_obj(input);
+    lv_obj_t *settings_tab = lv_obj_get_child(content, 2);
+    lv_obj_update_layout(screen);
+    if (lv_obj_get_scroll_bottom(settings_tab) <= 0) return EXIT_FAILURE;
+    lv_obj_t *audio_row = lv_obj_get_child(settings_tab, 1);
+    for (unsigned i = 0; i < 2; ++i) {
+        lv_obj_t *column = lv_obj_get_child(audio_row, i + 1);
+        lv_obj_t *roller = lv_obj_get_child(column, 1);
+        lv_area_t column_bounds, roller_bounds;
+        lv_obj_get_content_coords(column, &column_bounds);
+        lv_obj_get_coords(roller, &roller_bounds);
+        if (roller_bounds.y2 > column_bounds.y2 ||
+            lv_obj_get_style_border_side(roller, LV_PART_MAIN) != LV_BORDER_SIDE_FULL ||
+            lv_obj_get_style_border_width(roller, LV_PART_MAIN) < 1)
+            return EXIT_FAILURE;
+    }
+    lv_obj_t *mode_controls[4];
+    for (unsigned i = 0; i < 4; ++i) {
+        lv_obj_t *row = lv_obj_get_child(settings_tab, 3 + i / 2);
+        mode_controls[i] = lv_obj_get_child(lv_obj_get_child(row, i % 2), 0);
+    }
+    for (unsigned selected = 0; selected < 4; ++selected) {
+        lv_obj_send_event(mode_controls[selected], LV_EVENT_VALUE_CHANGED, NULL);
+        for (unsigned i = 0; i < 4; ++i)
+            if (lv_obj_has_state(mode_controls[i], LV_STATE_CHECKED) != (i == selected))
+                return EXIT_FAILURE;
+    }
     if (lv_obj_get_style_border_width(input, LV_PART_CURSOR) != 2 ||
         lv_obj_get_style_border_opa(input, LV_PART_CURSOR) != LV_OPA_COVER ||
         lv_obj_get_style_border_side(input, LV_PART_CURSOR) != LV_BORDER_SIDE_LEFT ||

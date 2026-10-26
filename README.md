@@ -81,7 +81,7 @@ SIGTERM cleanly stop the application.
 
 ## Native build and headless check
 
-Requires CMake, C/C++ compilers, pthreads, and libpng development files.
+Requires CMake, C/C++ compilers, pthreads, and libpng/ALSA development files.
 
 ```sh
 cmake -S lvgl-console -B /tmp/lvgl-console-native \
@@ -130,6 +130,37 @@ shows `PTT unavailable`. The state file changes on activity transitions, not as
 a periodic heartbeat, so idle state does not expire. Socket availability does
 not prove server connectivity or client responsiveness.
 
+Settings places the Screen saver checkbox below PTT Operation mode under a
+System settings heading. Save is at the bottom, with feedback below it. The
+input/output volume rollers appear side by side above PTT Operation mode.
+Each roller shows three rows with
+options from 0% through 100% in 5% steps, without wrapping. Selecting a value
+applies it immediately. The initial hardware level is displayed at the nearest
+5% option without changing the volume until selection. Scroll chaining and
+gesture bubbling are disabled on the rollers to reduce accidental tab changes.
+Capture and playback use separate ALSA controls, with all channels
+set to the selected level. Mute switches are left unchanged. These are live
+mixer settings, not saved by the PTT identity Save button. Existing ALSA state
+restoration determines whether mixer levels survive reboot.
+
+The mixer defaults to `hw:Audio`. Override with `LVGL_ALSA_CARD`; set
+`LVGL_ALSA_CAPTURE_CONTROL` and `LVGL_ALSA_PLAYBACK_CONTROL` to exact simple
+control names when necessary (index 0). Auto-selection tries Headset/Mic/Capture
+for input and Headset/Speaker/Headphone/PCM/Master for output, using the first compatible
+control. Missing devices/controls show N/A with disabled rollers; restart the
+application after attaching the device or changing its mapping. Run
+`amixer -c Audio scontents` on the target to inspect names, ranges, and switches.
+The application now links alsa-lib, including its mixer API.
+
+Settings scrolls vertically. Beneath the narrow Input/Output rollers, the PTT
+Operation mode section offers mutually exclusive WAN, DARK FIBER, DATA DIODE
+(TX), and DATA DIODE (RX) choices. This selection is a UI placeholder only: it
+starts at WAN each launch and does not change client flags or persist a mode.
+The WAN address field reads `UDPPTT_SERVER` from `/etc/default/udpptt`; Save
+updates it together with the identity settings. IP addresses and hostnames are
+supported, and a blank value remains allowed for an unconfigured device. Restart
+`udpptt.service` to apply a changed server address.
+
 Settings loads `/etc/default/udpptt`. The three fields edit `UDPPTT_TXID`
 (1–31 characters), `UDPPTT_DPI_ID` (1–63 characters), and `UDPPTT_PREAMBLE_ID`
 (exactly five uppercase A–Z letters). IDs accept letters, digits, dots,
@@ -137,7 +168,7 @@ underscores, and hyphens. Touch a field to focus it and use the physical
 keyboard; Tab advances through the focus group. No virtual keyboard is opened.
 
 **Save** validates the fields and atomically updates these settings while
-preserving other entries and comments, including server, audio device, and key.
+preserving other entries and comments, including the audio device and key.
 The existing file's permissions and (when running as root) ownership are
 preserved. Errors appear below Save. The file must already exist and the process
 must have permission to replace it in `/etc/default`. No shell commands are run
