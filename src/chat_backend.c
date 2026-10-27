@@ -95,7 +95,7 @@ void app_chat_poll(struct app_chat *c) {
         *body++ = 0;
         if (parse_header(buf, &request, &epoch, &event, type) || !epoch) { lost(c); break; }
         if (c->epoch != epoch) {
-            if (c->epoch) c->event(c->context, "NOTICE", 0, "Chat connector restarted; previous connector history was lost");
+            if (c->epoch) c->event(c->context, "NOTICE", 0, "Chat connector restarted; messages received while disconnected are not saved");
             c->epoch = epoch; c->last = 0;
         }
         if (event) {

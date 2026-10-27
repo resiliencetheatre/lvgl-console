@@ -250,7 +250,8 @@ int main(void)
     lv_indev_read(keyboard);
     chat_cycle();
     lv_obj_t *messaging = lv_obj_get_child(content, 1);
-    lv_obj_t *history = lv_obj_get_child(messaging, 0);
+    lv_obj_t *viewport = lv_obj_get_child(messaging, 0);
+    lv_obj_t *history = lv_obj_get_child(viewport, 0);
     if (lv_obj_get_child_count(history) != 1 ||
         strcmp(lv_label_get_text(lv_obj_get_child(history, 0)), "Hi") ||
         lv_textarea_get_text(input)[0]) return EXIT_FAILURE;

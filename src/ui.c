@@ -820,6 +820,14 @@ static void chat_tick(lv_timer_t *timer)
     app_chat_poll(panel->backend);
 }
 
+static void clear_chat(lv_event_t *event)
+{
+    struct chat_panel *panel = lv_event_get_user_data(event);
+    lv_obj_clean(panel->history);
+    lv_obj_scroll_to_y(panel->history, 0, LV_ANIM_OFF);
+    lv_textarea_set_text(panel->input, "");
+}
+
 static void delete_chat(lv_event_t *event)
 {
     struct chat_panel *panel = lv_event_get_user_data(event);
@@ -885,10 +893,16 @@ lv_obj_t *app_ui_create(lv_obj_t *screen)
     lv_obj_set_flex_flow(status, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(status, 8, 0);
     lv_obj_set_scrollable(status, false);
-    lv_obj_t *history = lv_obj_create(status);
-    lv_obj_set_width(history, LV_PCT(100));
-    lv_obj_set_height(history, 0);
-    lv_obj_set_flex_grow(history, 1);
+    /* A separate viewport keeps the clear button above the scrolling text. */
+    lv_obj_t *viewport = lv_obj_create(status);
+    lv_obj_set_width(viewport, LV_PCT(100));
+    lv_obj_set_height(viewport, 0);
+    lv_obj_set_flex_grow(viewport, 1);
+    lv_obj_set_style_pad_all(viewport, 0, 0);
+    lv_obj_set_style_border_width(viewport, 0, 0);
+    lv_obj_set_scrollable(viewport, false);
+    lv_obj_t *history = lv_obj_create(viewport);
+    lv_obj_set_size(history, LV_PCT(100), LV_PCT(100));
     lv_obj_set_flex_flow(history, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_scroll_dir(history, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(history, LV_SCROLLBAR_MODE_AUTO);
@@ -906,6 +920,14 @@ lv_obj_t *app_ui_create(lv_obj_t *screen)
     if (chat) {
         chat->history = history;
         chat->input = input;
+        lv_obj_t *clear = lv_button_create(viewport);
+        lv_obj_set_size(clear, 84, 36);
+        lv_obj_align(clear, LV_ALIGN_TOP_RIGHT, -6, 6);
+        lv_obj_set_scroll_on_focus(clear, false);
+        lv_obj_t *clear_label = lv_label_create(clear);
+        lv_label_set_text(clear_label, "CLEAR");
+        lv_obj_center(clear_label);
+        lv_obj_add_event_cb(clear, clear_chat, LV_EVENT_CLICKED, chat);
         chat->peers = lv_label_create(status);
         lv_obj_set_width(chat->peers, LV_PCT(100));
         lv_label_set_long_mode(chat->peers, LV_LABEL_LONG_MODE_DOTS);
