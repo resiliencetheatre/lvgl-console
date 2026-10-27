@@ -385,20 +385,34 @@ static void save_settings(lv_event_t *event)
 
 static lv_obj_t *volume_rollers[2];
 static bool volume_updating;
+static const char *volume_options =
+    "0%\n5%\n10%\n15%\n20%\n25%\n30%\n35%\n40%\n45%\n50%\n55%\n60%\n65%\n70%\n75%\n80%\n85%\n90%\n95%\n100%";
+
+static void refresh_volume_controls(void)
+{
+    app_volume_select_device(saved_settings.alsa_device);
+    volume_updating = true;
+    for (unsigned i = 0; i < 2; ++i) {
+        int value;
+        bool available = app_volume_get(i == 0, &value) == 0;
+        lv_roller_set_options(volume_rollers[i], available ? volume_options : "N/A", LV_ROLLER_MODE_NORMAL);
+        if (available) {
+            lv_roller_set_selected(volume_rollers[i], (value + 2) / 5, LV_ANIM_OFF);
+            lv_obj_remove_state(volume_rollers[i], LV_STATE_DISABLED);
+        } else lv_obj_add_state(volume_rollers[i], LV_STATE_DISABLED);
+    }
+    volume_updating = false;
+}
+
 static void volume_event(lv_event_t *event)
 {
     if (volume_updating) return;
     unsigned index = (unsigned)(uintptr_t)lv_event_get_user_data(event);
-    lv_obj_t *roller = volume_rollers[index];
-    int value = lv_roller_get_selected(roller) * 5;
+    if (lv_obj_has_state(volume_rollers[index], LV_STATE_DISABLED)) return;
+    int value = lv_roller_get_selected(volume_rollers[index]) * 5;
     int rc = app_volume_set(index == 0, value);
     if (rc < 0) lv_label_set_text_fmt(save_feedback, "Volume failed: %s", snd_strerror(rc));
-    int actual;
-    if (!app_volume_get(index == 0, &actual) && actual != value) {
-        volume_updating = true;
-        lv_roller_set_selected(roller, (actual + 2) / 5, LV_ANIM_OFF);
-        volume_updating = false;
-    }
+    refresh_volume_controls();
 }
 
 static uint32_t settings_last_scroll;
@@ -461,24 +475,15 @@ static void create_volume_controls(lv_obj_t *settings)
         lv_obj_t *caption = lv_label_create(column);
         lv_label_set_text(caption, i == 0 ? "Input" : "Output");
         lv_obj_set_style_text_font(caption, &lv_font_montserrat_20, 0);
-        int value = 0;
-        bool available = app_volume_get(i == 0, &value) == 0;
         volume_rollers[i] = lv_roller_create(column);
         lv_obj_set_width(volume_rollers[i], LV_PCT(100));
         lv_obj_set_scroll_on_focus(volume_rollers[i], false);
         lv_obj_set_scroll_chain(volume_rollers[i], false);
         lv_obj_set_gesture_bubble(volume_rollers[i], false);
-        lv_roller_set_options(volume_rollers[i],
-            "0%\n5%\n10%\n15%\n20%\n25%\n30%\n35%\n40%\n45%\n50%\n55%\n60%\n65%\n70%\n75%\n80%\n85%\n90%\n95%\n100%",
-            LV_ROLLER_MODE_NORMAL);
         lv_roller_set_visible_row_count(volume_rollers[i], 3);
-        lv_roller_set_selected(volume_rollers[i], (value + 2) / 5, LV_ANIM_OFF);
-        if (!available) {
-            lv_label_set_text(caption, i == 0 ? "Input: N/A" : "Output: N/A");
-            lv_obj_add_state(volume_rollers[i], LV_STATE_DISABLED);
-        }
         lv_obj_add_event_cb(volume_rollers[i], volume_event, LV_EVENT_VALUE_CHANGED, (void *)(uintptr_t)i);
     }
+    refresh_volume_controls();
 }
 
 static lv_obj_t *audio_modes[2], *preamble_checkbox;
@@ -516,6 +521,7 @@ static void audio_result(lv_timer_t *timer)
     if (saved_settings.preamble_enabled) lv_obj_add_state(preamble_checkbox, LV_STATE_CHECKED);
     else lv_obj_remove_state(preamble_checkbox, LV_STATE_CHECKED);
     refresh_audio_selection();
+    refresh_volume_controls();
     lv_label_set_text(save_feedback, result > 0 && WIFEXITED(status) && WEXITSTATUS(status) == 0
         ? "Settings applied; udpptt restarted."
         : "Settings apply or restart failed; check configuration and journal.");
@@ -540,6 +546,7 @@ static void select_audio(lv_event_t *event)
     for (unsigned i = 0; i < 2; ++i) lv_obj_add_state(audio_modes[i], LV_STATE_DISABLED);
     lv_obj_add_state(save_button, LV_STATE_DISABLED);
     lv_obj_add_state(preamble_checkbox, LV_STATE_DISABLED);
+    for (unsigned i = 0; i < 2; ++i) lv_obj_add_state(volume_rollers[i], LV_STATE_DISABLED);
     lv_label_set_text(save_feedback, "Applying audio profile and restarting udpptt...");
     lv_timer_resume(lv_event_get_user_data(event));
 }

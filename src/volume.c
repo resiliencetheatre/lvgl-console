@@ -3,6 +3,27 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
+
+static char selected_card[128];
+static int device_error;
+
+int app_volume_select_device(const char *device)
+{
+    selected_card[0] = 0;
+    device_error = 0;
+    /* An explicit PTT device takes precedence over old launcher overrides. */
+    if (!device || !*device) return 0;
+    const char *card;
+    if (!strncmp(device, "plughw:", 7)) card = device + 7;
+    else if (!strncmp(device, "hw:", 3)) card = device + 3;
+    else return device_error = -EINVAL;
+    if (!strncmp(card, "CARD=", 5)) card += 5;
+    size_t length = strcspn(card, ",");
+    if (!length || length + 4 > sizeof(selected_card)) return device_error = -EINVAL;
+    snprintf(selected_card, sizeof(selected_card), "hw:%.*s", (int)length, card);
+    return 0;
+}
 
 static bool usable(snd_mixer_elem_t *e, bool capture)
 {
@@ -10,7 +31,8 @@ static bool usable(snd_mixer_elem_t *e, bool capture)
 }
 static int open_control(bool capture, snd_mixer_t **mixer, snd_mixer_elem_t **element)
 {
-    const char *card = getenv("LVGL_ALSA_CARD");
+    if (device_error) return device_error;
+    const char *card = *selected_card ? selected_card : getenv("LVGL_ALSA_CARD");
     if (!card || !*card) card = "hw:Audio";
     int rc = snd_mixer_open(mixer, 0);
     if (rc < 0) return rc;

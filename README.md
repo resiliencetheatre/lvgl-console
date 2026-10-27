@@ -165,12 +165,18 @@ set to the selected level. Mute switches are left unchanged. These are live
 mixer settings, not saved by the PTT identity Save button. Existing ALSA state
 restoration determines whether mixer levels survive reboot.
 
-The mixer defaults to `hw:Audio`. Override with `LVGL_ALSA_CARD`; set
+The mixer follows `UDPPTT_ALSA_DEVICE`: USB HF uses `hw:Audio`, and USB Monofone
+uses `hw:UACDemoV10`. Both rollers reload hardware levels after profile switching;
+changing a roller immediately writes to the selected card. While switching,
+volume controls are disabled. Missing controls display N/A rather than 0%.
+An explicit PTT device takes precedence over `LVGL_ALSA_CARD`, including old
+launcher overrides. Only when no PTT device is configured does the mixer fall
+back to `LVGL_ALSA_CARD`, then `hw:Audio`. Set
 `LVGL_ALSA_CAPTURE_CONTROL` and `LVGL_ALSA_PLAYBACK_CONTROL` to exact simple
 control names when necessary (index 0). Auto-selection tries Headset/Mic/Capture
 for input and Headset/Speaker/Headphone/PCM/Master for output, using the first compatible
-control. Missing devices/controls show N/A with disabled rollers; restart the
-application after attaching the device or changing its mapping. Run
+control. Missing devices/controls show N/A with disabled rollers; switching
+profiles or restarting the application retries discovery. Run
 `amixer -c Audio scontents` on the target to inspect names, ranges, and switches.
 The application now links alsa-lib, including its mixer API.
 

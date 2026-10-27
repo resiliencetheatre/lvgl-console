@@ -166,6 +166,11 @@ int main(void)
     for (unsigned i = 0; i < 2; ++i) {
         lv_obj_t *column = lv_obj_get_child(audio_row, i + 1);
         lv_obj_t *roller = lv_obj_get_child(column, 1);
+        if (lv_obj_has_state(roller, LV_STATE_DISABLED) &&
+            strcmp(lv_roller_get_options(roller), "N/A")) {
+            fprintf(stderr, "Unavailable mixer must show N/A, not a false zero level\n");
+            return EXIT_FAILURE;
+        }
         lv_area_t column_bounds, roller_bounds;
         lv_obj_get_content_coords(column, &column_bounds);
         lv_obj_get_coords(roller, &roller_bounds);
