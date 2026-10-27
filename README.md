@@ -249,12 +249,21 @@ unique nickname and room in `/etc/default/utxtrelay`, then restart the connector
 The default server `127.0.0.1` is a placeholder, with no relay server autostart.
 The UI package alone still installs no service; these units are overlay-specific.
 
-At startup the first `/dev/input/by-id/*-event-kbd` device is opened, falling
-back to `/dev/input/keyboard`. Override this with
-`LV_LINUX_KEYBOARD_DEVICE=/dev/input/eventN`. Connect the keyboard before
-starting the app. The demo uses a US layout with Shift, Caps Lock, Backspace,
-Delete, Home and End; international layouts and hotplug are not
-implemented. Touch input continues to use `LV_LINUX_EVDEV_DEVICE`.
+By default all `/dev/input/event*` devices with ordinary typing keys are opened.
+The internal Pico keyboard and an external USB keyboard can type into the same
+focused field simultaneously. Each keyboard has independent Shift/Caps Lock
+state. Mouse and media-only interfaces are excluded by their key capabilities;
+mixed keyboard/control devices such as the Pico are supported.
+
+Devices are rescanned once per second, so USB keyboards can be connected,
+unplugged, and reconnected without restarting the app. Unplugging clears held
+keys. Set `LV_LINUX_KEYBOARD_DEVICE` to a single event device or stable by-id
+symlink to restrict input to that keyboard; that path is also retried after
+removal. Leave the variable unset to use both keyboards.
+
+The demo uses a US layout with Shift, Caps Lock, Backspace, Delete, Home and End;
+international layouts are not implemented. Touch input continues to use
+`LV_LINUX_EVDEV_DEVICE`.
 
 Left/Right moves the cursor in the text entry; Home/End moves to the start/end.
 Arrow keys no longer switch tabs. Select PTT / Messaging / Settings by touch.
@@ -266,8 +275,8 @@ For the Pico keyboard shown as `/dev/input/event1`, start with:
 LV_LINUX_KEYBOARD_DEVICE=/dev/input/event1 /usr/bin/lvgl-console-launcher
 ```
 
-Event numbers can change across boots; prefer the automatic by-id discovery
-or set a stable `/dev/input/by-id/*-event-kbd` path when available.
+Event numbers can change across boots; prefer automatic capability discovery
+or, for a single keyboard override, set a stable `/dev/input/by-id/*-event-kbd` path when available.
 
 ## Console launcher
 

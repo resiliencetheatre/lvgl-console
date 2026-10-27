@@ -24,7 +24,7 @@ int main(int argc, char **argv)
             puts("Usage: lvgl-console\n"
                  "  LV_LINUX_FBDEV_DEVICE: framebuffer (default /dev/fb0)\n"
                  "  LV_LINUX_EVDEV_DEVICE: pointer/touch device (default /dev/input/touchscreen)\n"
-                 "  LV_LINUX_KEYBOARD_DEVICE: keyboard event device (default USB auto-detection)");
+                 "  LV_LINUX_KEYBOARD_DEVICE: single keyboard override (default all typing keyboards, hotplug)");
             return EXIT_SUCCESS;
         }
         fprintf(stderr, "Usage: %s [--help]\n", argv[0]);
@@ -57,8 +57,8 @@ int main(int argc, char **argv)
     lv_obj_t *text_input = app_ui_create(lv_display_get_screen_active(display));
     lv_group_add_obj(keyboard_group, text_input);
     app_ui_add_settings_to_group(keyboard_group);
-    lv_indev_t *keyboard = app_keyboard_create(getenv("LV_LINUX_KEYBOARD_DEVICE"), keyboard_group);
-    if (keyboard) lv_indev_set_display(keyboard, display);
+    AppKeyboards *keyboards = app_keyboards_start(getenv("LV_LINUX_KEYBOARD_DEVICE"), keyboard_group, display);
+    if (!keyboards) fprintf(stderr, "Unable to initialize keyboard discovery\n");
     while (running) {
         /* fbdev supplies LVGL's monotonic tick callback. */
         uint32_t delay = lv_timer_handler();
@@ -66,6 +66,7 @@ int main(int argc, char **argv)
         if (delay < 1) delay = 1;
         usleep(delay * 1000);
     }
+    app_keyboards_stop(keyboards);
     app_ui_resume_display();
     lv_deinit();
     return EXIT_SUCCESS;
