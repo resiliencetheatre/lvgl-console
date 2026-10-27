@@ -1,0 +1,13 @@
+#!/bin/sh
+# Replace the complete client configuration using an allowlisted device profile.
+set -eu
+case "${1:-}" in
+    usb-hf|usb-monofone) profile="/etc/default/udpptt.$1" ;;
+    *) echo "Unknown audio profile" >&2; exit 1 ;;
+esac
+# Stage the copy on the same filesystem so readers never see a partial file.
+tmp=$(mktemp /etc/default/.udpptt.XXXXXX)
+trap 'rm -f "$tmp"' EXIT HUP INT TERM
+cp -p "$profile" "$tmp"
+mv -f "$tmp" /etc/default/udpptt
+/bin/systemctl restart udpptt.service

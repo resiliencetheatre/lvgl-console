@@ -1,21 +1,61 @@
 #include "ui.h"
 #include "keyboard.h"
 #include <linux/input.h>
+#include <sys/socket.h>
+#include <sys/un.h>
+#include <unistd.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 static unsigned flushes;
+static uint16_t rendered[480][640], reference[480][640];
+extern int chat_test_peer, chat_test_disabled;
+extern int poweroff_test_calls, poweroff_test_spawn_error, poweroff_test_exit_status;
+#define chat_peer chat_test_peer
+static unsigned chat_event_id;
+static void chat_cycle(void)
+{
+    lv_tick_inc(100);
+    lv_timer_handler();
+    if (chat_peer >= 0) {
+        for (;;) {
+            char record[2049], response[2200], type[16];
+            unsigned request; unsigned long long epoch, event;
+            ssize_t n = recv(chat_peer, record, sizeof(record)-1, MSG_DONTWAIT);
+            if (n <= 0) break;
+            record[n] = 0;
+            char *body = strchr(record, '\n');
+            if (!body || sscanf(record, "UX1 %u %llu %llu %15s", &request, &epoch, &event, type) != 4) abort();
+            if (!strcmp(type, "RESUME")) {
+                const char *state = "UX1 0 99 0 STATE\nTest relay responding";
+                if (send(chat_peer, state, strlen(state), MSG_NOSIGNAL) < 0) abort();
+                continue;
+            }
+            if (strcmp(type, "SEND")) abort();
+            int len = snprintf(response, sizeof(response), "UX1 %u 99 %u CHAT\n%s", request, ++chat_event_id, body + 1);
+            if (send(chat_peer, response, len, MSG_NOSIGNAL) != len) abort();
+            len = snprintf(response, sizeof(response), "UX1 %u 99 0 OK\nSubmitted", request);
+            if (send(chat_peer, response, len, MSG_NOSIGNAL) != len) abort();
+        }
+    }
+    lv_tick_inc(100);
+    lv_timer_handler();
+}
 static void flush(lv_display_t *display, const lv_area_t *area, uint8_t *pixels)
 {
-    (void)area;
-    (void)pixels;
+    unsigned stride = lv_draw_buf_width_to_stride(lv_area_get_width(area), LV_COLOR_FORMAT_RGB565);
+    for (int y = area->y1; y <= area->y2; ++y)
+        memcpy(&rendered[y][area->x1], pixels + (y-area->y1)*stride,
+               (size_t)lv_area_get_width(area)*2);
     ++flushes;
     lv_display_flush_ready(display);
 }
 
 int main(void)
 {
+    setenv("UTXTRELAY_SOCKET", "/mock/chat.sock", 1);
     lv_init();
     lv_display_t *display = lv_display_create(640, 480);
     static uint8_t buffer[800 * 48 * 2];
@@ -30,6 +70,7 @@ int main(void)
     }
     lv_obj_t *screen = lv_display_get_screen_active(display);
     lv_obj_t *input = app_ui_create(screen);
+    chat_cycle();
     lv_group_t *group = lv_group_create();
     lv_group_add_obj(group, input);
     app_ui_add_settings_to_group(group);
@@ -107,6 +148,20 @@ int main(void)
     lv_obj_t *settings_tab = lv_obj_get_child(content, 2);
     lv_obj_update_layout(screen);
     if (lv_obj_get_scroll_bottom(settings_tab) <= 0) return EXIT_FAILURE;
+    /* Incremental scrolling must match a forced full redraw. */
+    lv_tabview_set_active(tabs, 2, LV_ANIM_OFF);
+    for (int offset = 0; offset <= 600; offset += 20) {
+        lv_obj_scroll_to_y(settings_tab, offset, LV_ANIM_OFF);
+        lv_refr_now(display);
+        memcpy(reference, rendered, sizeof(reference));
+        lv_obj_invalidate(screen);
+        lv_refr_now(display);
+        if (memcmp(reference, rendered, sizeof(reference))) {
+            fprintf(stderr, "Settings redraw differs at scroll %d\n", offset);
+            return EXIT_FAILURE;
+        }
+    }
+    lv_obj_scroll_to_y(settings_tab, 0, LV_ANIM_OFF);
     lv_obj_t *audio_row = lv_obj_get_child(settings_tab, 1);
     for (unsigned i = 0; i < 2; ++i) {
         lv_obj_t *column = lv_obj_get_child(audio_row, i + 1);
@@ -188,6 +243,7 @@ int main(void)
     if (fwrite(enter, sizeof(enter), 1, stream) != 1 || fflush(stream))
         return EXIT_FAILURE;
     lv_indev_read(keyboard);
+    chat_cycle();
     lv_obj_t *messaging = lv_obj_get_child(content, 1);
     lv_obj_t *history = lv_obj_get_child(messaging, 0);
     if (lv_obj_get_child_count(history) != 1 ||
@@ -201,6 +257,7 @@ int main(void)
         snprintf(message, sizeof(message), "Message %u: This is a longer local demonstration message to exercise wrapping and scrolling in the chat history.", i);
         lv_textarea_set_text(input, message);
         lv_obj_send_event(input, LV_EVENT_READY, NULL);
+        chat_cycle();
     }
     lv_obj_update_layout(screen);
     if (lv_obj_get_child_count(history) != 100 || lv_obj_get_scroll_y(history) <= 0)
@@ -212,7 +269,43 @@ int main(void)
     lv_obj_get_coords(input, &input_area);
     lv_obj_get_coords(bar, &bar_area);
     if (input_area.y2 >= bar_area.y1) return EXIT_FAILURE;
+    /* Exercise shutdown only through mocked process calls. */
+    lv_obj_t *actions = lv_obj_get_child(settings_tab, lv_obj_get_child_count(settings_tab) - 2);
+    lv_obj_t *poweroff = lv_obj_get_child(actions, 0);
+    lv_obj_t *save = lv_obj_get_child(actions, 1);
+    lv_obj_update_layout(screen);
+    if (strcmp(lv_label_get_text(lv_obj_get_child(poweroff, 0)), "Poweroff") ||
+        strcmp(lv_label_get_text(lv_obj_get_child(save, 0)), "Save") ||
+        lv_obj_get_x(poweroff) + lv_obj_get_width(poweroff) >= lv_obj_get_x(save)) return EXIT_FAILURE;
+    poweroff_test_spawn_error = EACCES;
+    lv_obj_send_event(poweroff, LV_EVENT_CLICKED, NULL);
+    if (poweroff_test_calls != 1 || lv_obj_has_state(poweroff, LV_STATE_DISABLED)) return EXIT_FAILURE;
+    poweroff_test_spawn_error = 0;
+    poweroff_test_exit_status = 1;
+    lv_obj_send_event(poweroff, LV_EVENT_CLICKED, NULL);
+    if (!lv_obj_has_state(poweroff, LV_STATE_DISABLED)) return EXIT_FAILURE;
+    lv_tick_inc(100); lv_timer_handler();
+    if (lv_obj_has_state(poweroff, LV_STATE_DISABLED)) return EXIT_FAILURE;
+    poweroff_test_exit_status = 0;
+    lv_obj_send_event(poweroff, LV_EVENT_CLICKED, NULL);
+    lv_obj_send_event(poweroff, LV_EVENT_CLICKED, NULL);
+    if (poweroff_test_calls != 3) return EXIT_FAILURE;
+    lv_tick_inc(100); lv_timer_handler();
+    if (!lv_obj_has_state(poweroff, LV_STATE_DISABLED)) return EXIT_FAILURE;
+    close(chat_peer);
+    chat_test_disabled = 1;
+    chat_peer = -1;
+    lv_tick_inc(100);
+    lv_timer_handler();
+    lv_textarea_set_text(input, "Keep this offline message");
+    lv_obj_send_event(input, LV_EVENT_READY, NULL);
+    if (strcmp(lv_textarea_get_text(input), "Keep this offline message")) return EXIT_FAILURE;
+    lv_textarea_set_text(input, "/secret test secret");
+    if (!lv_textarea_get_password_mode(input)) return EXIT_FAILURE;
+    lv_textarea_set_text(input, "normal text");
+    if (lv_textarea_get_password_mode(input)) return EXIT_FAILURE;
     fclose(stream);
+    lv_obj_clean(screen);
     lv_deinit();
     puts("Logo, tabs, messaging history, text cursor and scrolling passed");
     return EXIT_SUCCESS;

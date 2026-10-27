@@ -3,8 +3,8 @@
 #include <stdbool.h>
 #include <stddef.h>
 typedef struct {
-    char txid[64], dpi_id[64], preamble[6], server[256];
-    bool screensaver;
+    char txid[64], dpi_id[64], preamble[6], server[256], alsa_device[128];
+    bool screensaver, preamble_enabled;
 } app_settings;
 int app_settings_load(const char *path, app_settings *settings);
 int app_settings_save(const char *path, const app_settings *settings);

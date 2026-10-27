@@ -19,7 +19,7 @@ while another tab is selected or the screen is blanked.
 The compiled outline data in `src/world_map_data.h` is simplified from Natural
 Earth's public-domain 1:110m country dataset. `tools/generate_world_map.py`
 documents the source and regenerates the header from its GeoJSON.
-Messaging provides a local chat demo; Settings edits PTT identities and
+Messaging connects to the utxtrelay console connector; Settings edits PTT identities and
 screen-saver preferences.
 
 The UI uses black backgrounds and neon green (`#39FF14`) text, borders,
@@ -131,7 +131,29 @@ a periodic heartbeat, so idle state does not expire. Socket availability does
 not prove server connectivity or client responsiveness.
 
 Settings places the Screen saver checkbox below PTT Operation mode under a
-System settings heading. Save is at the bottom, with feedback below it. The
+System settings heading. Audio device below Screen saver uses the same radio-style
+selection as PTT Operation mode: **USB HF** or **USB Monofone**. Selection immediately
+copies `/etc/default/udpptt.usb-hf` or `/etc/default/udpptt.usb-monofone` over
+`/etc/default/udpptt` and restarts `udpptt.service` asynchronously. USB HF selects
+`plughw:CARD=Audio,DEV=0`; USB Monofone selects `plughw:CARD=UACDemoV10,DEV=0`
+and enables `--usbptt`. Configure the server, credentials and IDs in **both profiles**
+before switching: the entire profile replaces the active configuration, including
+screen saver state, and unsaved field edits are discarded. Save edits only the active
+configuration; update the profile files too if those edits should survive switching.
+Copy/restart errors appear in the Settings feedback.
+The application install includes `/usr/libexec/udpptt-audio-select` (with a `/usr`
+install prefix). When updating an existing device, deploy that helper as well as
+the binary, both profile files, and the updated PocketTerm `udpptt.service`; run
+`systemctl daemon-reload` after updating the unit. The application install also includes both profile templates in `/etc/default`;
+configure their server and credentials for the device. The updated service unit
+comes from the PocketTerm root filesystem overlay, which requires a full image
+build to refresh.
+
+Network status below it lists all interfaces (including
+loopback), with one line per assigned IPv4 or IPv6 address and an UP/DOWN status.
+Interfaces without addresses show `No IP`; UP requires both enabled and running
+interface flags. The list refreshes every two seconds, pausing during screen
+saver blanking. Save is at the bottom, with feedback below it. The
 input/output volume rollers appear side by side above PTT Operation mode.
 Each roller shows three rows with
 options from 0% through 100% in 5% steps, without wrapping. Selecting a value
@@ -167,6 +189,13 @@ Settings loads `/etc/default/udpptt`. The three fields edit `UDPPTT_TXID`
 underscores, and hyphens. Touch a field to focus it and use the physical
 keyboard; Tab advances through the focus group. No virtual keyboard is opened.
 
+**Poweroff**, to the left of Save, requests an orderly system shutdown with
+`/bin/systemctl --no-block poweroff`. It does not save pending settings. The
+button is disabled after submission; failures are shown below the buttons and
+allow retry. The command runs asynchronously so the UI stays responsive, and
+systemd stops the console launcher during shutdown to restore the VT. The
+PocketTerm service runs as root, which permits the poweroff request.
+
 **Save** validates the fields and atomically updates these settings while
 preserving other entries and comments, including the audio device and key.
 The existing file's permissions and (when running as root) ownership are
@@ -184,12 +213,35 @@ delivered to the UI. `SCREENSAVER_IDLE_MS` in `src/ui.c` sets the timeout. HDMI
 audio may be interrupted while the display is blanked. The default is off.
 
 Messaging contains a vertically scrollable history and a fixed single-line
-entry field. Enter appends the typed message locally, clears the entry, and
-scrolls to the newest message. Blank messages are ignored. Messages wrap within
-the history; input is limited to 512 characters and the latest 100 messages are
-retained in memory. Nothing is sent over the network or saved across restarts.
-The append callback in `src/ui.c` is the placeholder for a future chat backend.
-No on-screen keyboard is created.
+entry field backed by `utxtrelay-console-client`. Enter submits a room message;
+`/msg NAME text` submits a direct message, `/who` refreshes participants,
+`/secret STRING` enables shared-secret encryption, `/secret off` clears it,
+and `/status` (or `/secret` alone) requests state. Secret entry is masked and
+cleared on submission; secrets are never added to chat history. The entry waits
+for a command result before accepting another submission. Failed ordinary
+messages stay in the entry; unknown outcomes are reported without automatic retry.
+
+The connector defaults to `/run/utxtrelay/console.sock`; override with
+`UTXTRELAY_SOCKET`. Participants appear below the entry. Connection diagnostics
+are hidden during normal use; `/status` or `/secret` displays room, nickname,
+relay status, encryption mode, and byte limit in the chat history. Send errors
+also appear in the history. Socket polling is nonblocking and continues on other
+tabs and while the display is blanked. On reconnection the connector replays up
+to 100 retained events with IDs to avoid duplicate display. Restarting the
+connector loses its history and encryption key; restarting the UI alone does not.
+
+Input is limited to 512 characters; the connector additionally enforces the
+900-byte UTF-8 clear-message limit and a smaller encrypted limit. The UI keeps
+100 history rows in memory, with wrapped text. A local message marked submitted
+means the connector wrote it to UDP, not that any recipient received it.
+No on-screen keyboard is created and no chat history is stored on disk.
+
+The PocketTerm overlay enables `utxtrelay-console-client.service` before
+`lvgl-console.service`, which runs the console launcher. The former
+`lvgl-com.service` name is an alias of this service. Configure the server, port,
+unique nickname and room in `/etc/default/utxtrelay`, then restart the connector.
+The default server `127.0.0.1` is a placeholder, with no relay server autostart.
+The UI package alone still installs no service; these units are overlay-specific.
 
 At startup the first `/dev/input/by-id/*-event-kbd` device is opened, falling
 back to `/dev/input/keyboard`. Override this with
@@ -261,3 +313,16 @@ SIGTERM; SIGKILL against the UI child is handled. Actual VT redraw and physical
 keyboard restoration need verification on the Pi. Automated launcher tests
 simulate only the VT operations and exercise real child processes and signals,
 without touching the host console.
+
+The **Audio PTT preamble** checkbox under PTT Operation mode saves
+`UDPPTT_PREAMBLE_ENABLED=0` or `1` and immediately restarts `udpptt.service`.
+No Save click is needed. Enabled passes `--preamble-id` with the saved preamble
+ID; disabled omits both the option and its value. Older configurations default
+to enabled. Audio profile switching reloads this setting from the profile.
+Deploy the updated `udpptt-prepare` and `udpptt.service` together with the UI;
+`make update_pocketterm` from the workspace does this and reloads systemd.
+
+Network status snapshots are sorted so interface/address enumeration order does
+not trigger redraws. Refreshes are deferred while Settings is scrolling and for
+500 ms afterward, and while the address list is off-screen. Transient read
+failures retain the last snapshot instead of collapsing and expanding the list.

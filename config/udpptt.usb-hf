@@ -1,0 +1,11 @@
+# Set the server address before starting udpptt.service.
+UDPPTT_SERVER=
+UDPPTT_ALSA_DEVICE=plughw:CARD=Audio,DEV=0
+UDPPTT_TXID=pocketterm
+UDPPTT_KEY=shared-room
+UDPPTT_DPI_ID=pocketterm
+UDPPTT_PREAMBLE_ID=POCKT
+# LVGL display blanking after 60 seconds of inactivity (0=off, 1=on).
+UDPPTT_SCREENSAVER=0
+UDPPTT_DEVICE_ARGS=
+UDPPTT_PREAMBLE_ENABLED=1

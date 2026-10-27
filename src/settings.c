@@ -7,11 +7,11 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-static const char *keys[] = {"UDPPTT_TXID", "UDPPTT_DPI_ID", "UDPPTT_PREAMBLE_ID", "UDPPTT_SCREENSAVER", "UDPPTT_SERVER"};
+static const char *keys[] = {"UDPPTT_TXID", "UDPPTT_DPI_ID", "UDPPTT_PREAMBLE_ID", "UDPPTT_SCREENSAVER", "UDPPTT_SERVER", "UDPPTT_ALSA_DEVICE", "UDPPTT_PREAMBLE_ENABLED"};
 static int key_index(const char *line, const char **value)
 {
     while (*line == ' ' || *line == '\t') ++line;
-    for (int i = 0; i < 5; ++i) {
+    for (int i = 0; i < 7; ++i) {
         size_t n = strlen(keys[i]);
         if (strncmp(line, keys[i], n)) continue;
         const char *separator = line + n;
@@ -27,7 +27,7 @@ static int key_index(const char *line, const char **value)
 }
 int app_settings_load(const char *path, app_settings *s)
 {
-    *s = (app_settings){.txid="pocketterm", .dpi_id="pocketterm", .preamble="POCKT"};
+    *s = (app_settings){.txid="pocketterm", .dpi_id="pocketterm", .preamble="POCKT", .preamble_enabled=true};
     FILE *f = fopen(path, "r");
     if (!f) return -1;
     char *line = NULL;
@@ -39,9 +39,10 @@ int app_settings_load(const char *path, app_settings *s)
         size_t n = strcspn(value, "\r\n");
         while (n && isspace((unsigned char)value[n-1])) --n;
         if (n >= 2 && (value[0] == '\'' || value[0] == '"') && value[n-1] == value[0]) { ++value; n -= 2; }
-        char *dest = i == 0 ? s->txid : i == 1 ? s->dpi_id : i == 4 ? s->server : s->preamble;
-        size_t limit = i == 2 ? sizeof(s->preamble) : i == 4 ? sizeof(s->server) : sizeof(s->txid);
-        if (i == 3) s->screensaver = n == 1 && *value == '1';
+        char *dest = i == 0 ? s->txid : i == 1 ? s->dpi_id : i == 4 ? s->server : i == 5 ? s->alsa_device : s->preamble;
+        size_t limit = i == 2 ? sizeof(s->preamble) : i == 4 ? sizeof(s->server) : i == 5 ? sizeof(s->alsa_device) : sizeof(s->txid);
+        if (i == 6) s->preamble_enabled = !(n == 1 && *value == '0');
+        else if (i == 3) s->screensaver = n == 1 && *value == '1';
         else {
             if (n >= limit) { free(line); fclose(f); errno = EINVAL; return -1; }
             memcpy(dest, value, n); dest[n] = 0;
@@ -88,11 +89,12 @@ int app_settings_save(const char *path, const app_settings *s)
     char *line = NULL; size_t capacity = 0;
     while (getline(&line, &capacity, in) >= 0) {
         const char *value;
-        if (key_index(line, &value) < 0 && fputs(line, out) == EOF) failed = 1;
+        int key = key_index(line, &value);
+        if ((key < 0 || key == 5) && fputs(line, out) == EOF) failed = 1;
     }
     if (ferror(in)) failed = 1;
     free(line); fclose(in);
-    if (fprintf(out, "\nUDPPTT_TXID=%s\nUDPPTT_DPI_ID=%s\nUDPPTT_PREAMBLE_ID=%s\nUDPPTT_SCREENSAVER=%d\nUDPPTT_SERVER=%s\n", s->txid, s->dpi_id, s->preamble, s->screensaver, s->server) < 0) failed = 1;
+    if (fprintf(out, "\nUDPPTT_TXID=%s\nUDPPTT_DPI_ID=%s\nUDPPTT_PREAMBLE_ID=%s\nUDPPTT_SCREENSAVER=%d\nUDPPTT_SERVER=%s\nUDPPTT_PREAMBLE_ENABLED=%d\n", s->txid, s->dpi_id, s->preamble, s->screensaver, s->server, s->preamble_enabled) < 0) failed = 1;
     if (fflush(out) || fsync(fd)) failed = 1;
     if (fclose(out)) failed = 1;
     if (!failed && rename(temp, path) == 0) return 0;

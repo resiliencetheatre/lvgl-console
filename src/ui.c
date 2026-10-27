@@ -1,5 +1,7 @@
 #include "ui.h"
+#include "chat_backend.h"
 #include "ping_status.h"
+#include "network_status.h"
 #include "ptt_status.h"
 #include "settings.h"
 #include "volume.h"
@@ -12,6 +14,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/ioctl.h>
+#include <sys/wait.h>
+#include <spawn.h>
 #include <unistd.h>
 #include "world_map_data.h"
 
@@ -274,7 +278,54 @@ static void create_ping_panel(lv_obj_t *screen)
 #define SCREENSAVER_IDLE_MS 60000
 static app_settings saved_settings;
 static lv_obj_t *settings_fields[3], *saver_checkbox, *save_button, *save_feedback;
-static lv_obj_t *server_input, *operation_modes[4];
+static lv_obj_t *server_input, *operation_modes[4], *poweroff_button;
+static pid_t poweroff_pid = -1;
+extern char **environ;
+
+static void poweroff_result(lv_timer_t *timer)
+{
+    int status;
+    pid_t result = waitpid(poweroff_pid, &status, WNOHANG);
+    if (!result || (result < 0 && errno == EINTR)) return;
+    int error = errno;
+    poweroff_pid = -1;
+    lv_timer_pause(timer);
+    if (result > 0 && WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+        lv_label_set_text(save_feedback, "Poweroff requested.");
+    } else {
+        lv_obj_remove_state(poweroff_button, LV_STATE_DISABLED);
+        if (result < 0)
+            lv_label_set_text_fmt(save_feedback, "Poweroff failed: %s", strerror(error));
+        else lv_label_set_text(save_feedback, "Poweroff failed; see system journal.");
+    }
+}
+
+static void request_poweroff(lv_event_t *event)
+{
+    if (poweroff_pid > 0 || lv_obj_has_state(poweroff_button, LV_STATE_DISABLED)) return;
+    lv_timer_t *timer = lv_event_get_user_data(event);
+    char *argv[] = {"/bin/systemctl", "--no-block", "poweroff", NULL};
+    pid_t pid;
+    int error = posix_spawn(&pid, argv[0], NULL, NULL, argv, environ);
+    if (error) {
+        lv_label_set_text_fmt(save_feedback, "Poweroff failed: %s", strerror(error));
+        return;
+    }
+    poweroff_pid = pid;
+    lv_obj_add_state(poweroff_button, LV_STATE_DISABLED);
+    lv_label_set_text(save_feedback, "Requesting poweroff...");
+    lv_timer_resume(timer);
+}
+
+static void delete_poweroff_timer(lv_event_t *event)
+{
+    lv_timer_delete(lv_event_get_user_data(event));
+    if (poweroff_pid > 0) {
+        /* Never block UI teardown while systemd is stopping the application. */
+        waitpid(poweroff_pid, NULL, WNOHANG);
+        poweroff_pid = -1;
+    }
+}
 static bool saver_sleeping;
 static uint32_t saver_last_idle;
 
@@ -313,7 +364,7 @@ static void delete_saver_timer(lv_event_t *event)
 static void save_settings(lv_event_t *event)
 {
     (void)event;
-    app_settings next = {0};
+    app_settings next = saved_settings;
     snprintf(next.txid, sizeof(next.txid), "%s", lv_textarea_get_text(settings_fields[0]));
     snprintf(next.dpi_id, sizeof(next.dpi_id), "%s", lv_textarea_get_text(settings_fields[1]));
     snprintf(next.preamble, sizeof(next.preamble), "%s", lv_textarea_get_text(settings_fields[2]));
@@ -348,6 +399,43 @@ static void volume_event(lv_event_t *event)
         lv_roller_set_selected(roller, (actual + 2) / 5, LV_ANIM_OFF);
         volume_updating = false;
     }
+}
+
+static uint32_t settings_last_scroll;
+static void settings_scrolled(lv_event_t *event)
+{
+    (void)event;
+    settings_last_scroll = lv_tick_get();
+}
+
+static void refresh_network_status(lv_timer_t *timer)
+{
+    if (sleep_fd >= 0) return;
+    lv_obj_t *label = lv_timer_get_user_data(timer);
+    lv_obj_t *settings = lv_obj_get_parent(label);
+    /* Changing this wrapping label changes the flex layout and scroll extent.
+     * Keep it stable during drags, momentum and the short settling period. */
+    if (!lv_obj_is_visible(label) || lv_obj_is_scrolling(settings) ||
+        lv_tick_elaps(settings_last_scroll) < 500) return;
+    char *snapshot = app_network_status_read();
+    /* A transient read failure must not collapse and re-expand the layout. */
+    if (snapshot && strcmp(lv_label_get_text(label), snapshot)) lv_label_set_text(label, snapshot);
+    free(snapshot);
+}
+
+static void create_network_status(lv_obj_t *settings)
+{
+    lv_obj_t *title = lv_label_create(settings);
+    lv_label_set_text(title, "Network status");
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_20, 0);
+    lv_obj_t *label = lv_label_create(settings);
+    lv_obj_set_width(label, LV_PCT(100));
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_16, 0);
+    char *snapshot = app_network_status_read();
+    lv_label_set_text(label, snapshot ? snapshot : "Network status unavailable");
+    free(snapshot);
+    lv_timer_t *timer = lv_timer_create(refresh_network_status, 2000, label);
+    if (timer) lv_obj_add_event_cb(label, delete_saver_timer, LV_EVENT_DELETE, timer);
 }
 
 static void create_volume_controls(lv_obj_t *settings)
@@ -391,6 +479,132 @@ static void create_volume_controls(lv_obj_t *settings)
         }
         lv_obj_add_event_cb(volume_rollers[i], volume_event, LV_EVENT_VALUE_CHANGED, (void *)(uintptr_t)i);
     }
+}
+
+static lv_obj_t *audio_modes[2], *preamble_checkbox;
+static lv_timer_t *audio_timer;
+static pid_t audio_pid = -1;
+
+static void refresh_audio_selection(void)
+{
+    for (unsigned i = 0; i < 2; ++i) {
+        const char *device = i ? "plughw:CARD=UACDemoV10,DEV=0" : "plughw:CARD=Audio,DEV=0";
+        if (!strcmp(saved_settings.alsa_device, device)) lv_obj_add_state(audio_modes[i], LV_STATE_CHECKED);
+        else lv_obj_remove_state(audio_modes[i], LV_STATE_CHECKED);
+    }
+}
+
+static void audio_result(lv_timer_t *timer)
+{
+    int status;
+    pid_t result = waitpid(audio_pid, &status, WNOHANG);
+    if (!result || (result < 0 && errno == EINTR)) return;
+    audio_pid = -1;
+    lv_timer_pause(timer);
+    for (unsigned i = 0; i < 2; ++i) lv_obj_remove_state(audio_modes[i], LV_STATE_DISABLED);
+    lv_obj_remove_state(save_button, LV_STATE_DISABLED);
+    lv_obj_remove_state(preamble_checkbox, LV_STATE_DISABLED);
+    /* The copy may have succeeded even if the service restart failed. */
+    if (app_settings_load("/etc/default/udpptt", &saved_settings) == 0) {
+        lv_textarea_set_text(settings_fields[0], saved_settings.txid);
+        lv_textarea_set_text(settings_fields[1], saved_settings.dpi_id);
+        lv_textarea_set_text(settings_fields[2], saved_settings.preamble);
+        lv_textarea_set_text(server_input, saved_settings.server);
+        if (saved_settings.screensaver) lv_obj_add_state(saver_checkbox, LV_STATE_CHECKED);
+        else lv_obj_remove_state(saver_checkbox, LV_STATE_CHECKED);
+    }
+    if (saved_settings.preamble_enabled) lv_obj_add_state(preamble_checkbox, LV_STATE_CHECKED);
+    else lv_obj_remove_state(preamble_checkbox, LV_STATE_CHECKED);
+    refresh_audio_selection();
+    lv_label_set_text(save_feedback, result > 0 && WIFEXITED(status) && WEXITSTATUS(status) == 0
+        ? "Settings applied; udpptt restarted."
+        : "Settings apply or restart failed; check configuration and journal.");
+}
+
+static void select_audio(lv_event_t *event)
+{
+    if (audio_pid > 0) return;
+    unsigned index = lv_event_get_target_obj(event) == audio_modes[1];
+    bool unchanged = !strcmp(saved_settings.alsa_device,
+        index ? "plughw:CARD=UACDemoV10,DEV=0" : "plughw:CARD=Audio,DEV=0");
+    refresh_audio_selection();
+    if (unchanged) return;
+    char *argv[] = {"/bin/sh", "/usr/libexec/udpptt-audio-select",
+                    index ? "usb-monofone" : "usb-hf", NULL};
+    int error = posix_spawn(&audio_pid, argv[0], NULL, NULL, argv, environ);
+    if (error) {
+        audio_pid = -1;
+        lv_label_set_text_fmt(save_feedback, "Audio selection failed: %s", strerror(error));
+        return;
+    }
+    for (unsigned i = 0; i < 2; ++i) lv_obj_add_state(audio_modes[i], LV_STATE_DISABLED);
+    lv_obj_add_state(save_button, LV_STATE_DISABLED);
+    lv_obj_add_state(preamble_checkbox, LV_STATE_DISABLED);
+    lv_label_set_text(save_feedback, "Applying audio profile and restarting udpptt...");
+    lv_timer_resume(lv_event_get_user_data(event));
+}
+
+static void delete_audio_timer(lv_event_t *event)
+{
+    lv_timer_delete(lv_event_get_user_data(event));
+    if (audio_pid > 0) waitpid(audio_pid, NULL, WNOHANG);
+    audio_pid = -1;
+}
+
+static void create_audio_modes(lv_obj_t *settings)
+{
+    lv_obj_t *row = lv_obj_create(settings);
+    lv_obj_set_size(row, LV_PCT(100), 56);
+    lv_obj_set_style_pad_all(row, 0, 0);
+    lv_obj_set_style_border_width(row, 0, 0);
+    lv_obj_set_scrollable(row, false);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_t *title = lv_label_create(row);
+    lv_label_set_text(title, "Audio device");
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_20, 0);
+    lv_timer_t *timer = lv_timer_create(audio_result, 100, NULL);
+    audio_timer = timer;
+    if (timer) {
+        lv_timer_pause(timer);
+        lv_obj_add_event_cb(row, delete_audio_timer, LV_EVENT_DELETE, timer);
+    }
+    for (unsigned i = 0; i < 2; ++i) {
+        audio_modes[i] = lv_checkbox_create(row);
+        lv_checkbox_set_text(audio_modes[i], i ? "USB Monofone" : "USB HF");
+        lv_obj_set_scroll_on_focus(audio_modes[i], false);
+        lv_obj_set_style_radius(audio_modes[i], LV_RADIUS_CIRCLE, LV_PART_INDICATOR);
+        if (timer) lv_obj_add_event_cb(audio_modes[i], select_audio, LV_EVENT_VALUE_CHANGED, timer);
+        else lv_obj_add_state(audio_modes[i], LV_STATE_DISABLED);
+    }
+    refresh_audio_selection();
+}
+
+static void select_preamble(lv_event_t *event)
+{
+    (void)event;
+    if (audio_pid > 0) return;
+    app_settings next = saved_settings;
+    next.preamble_enabled = lv_obj_has_state(preamble_checkbox, LV_STATE_CHECKED);
+    if (app_settings_save("/etc/default/udpptt", &next)) {
+        if (saved_settings.preamble_enabled) lv_obj_add_state(preamble_checkbox, LV_STATE_CHECKED);
+        else lv_obj_remove_state(preamble_checkbox, LV_STATE_CHECKED);
+        lv_label_set_text_fmt(save_feedback, "Preamble save failed: %s", strerror(errno));
+        return;
+    }
+    saved_settings = next;
+    char *argv[] = {"/bin/systemctl", "restart", "udpptt.service", NULL};
+    int error = posix_spawn(&audio_pid, argv[0], NULL, NULL, argv, environ);
+    if (error) {
+        audio_pid = -1;
+        lv_label_set_text_fmt(save_feedback, "Preamble saved; restart failed: %s", strerror(error));
+        return;
+    }
+    for (unsigned i = 0; i < 2; ++i) lv_obj_add_state(audio_modes[i], LV_STATE_DISABLED);
+    lv_obj_add_state(save_button, LV_STATE_DISABLED);
+    lv_obj_add_state(preamble_checkbox, LV_STATE_DISABLED);
+    lv_label_set_text(save_feedback, "Preamble saved; restarting udpptt...");
+    lv_timer_resume(audio_timer);
 }
 
 static void select_operation_mode(lv_event_t *event)
@@ -451,7 +665,10 @@ void app_ui_add_settings_to_group(lv_group_t *group)
     for (unsigned i = 0; i < 2; ++i) lv_group_add_obj(group, volume_rollers[i]);
     for (unsigned i = 0; i < 4; ++i) lv_group_add_obj(group, operation_modes[i]);
     lv_group_add_obj(group, server_input);
+    lv_group_add_obj(group, preamble_checkbox);
     lv_group_add_obj(group, saver_checkbox);
+    for (unsigned i = 0; i < 2; ++i) lv_group_add_obj(group, audio_modes[i]);
+    lv_group_add_obj(group, poweroff_button);
     lv_group_add_obj(group, save_button);
 }
 
@@ -548,18 +765,16 @@ static void apply_neon_theme(lv_obj_t *obj)
         apply_neon_theme(lv_obj_get_child(obj, i));
 }
 
-/* Local-only chat demo. Replace this append callback when a backend is chosen. */
-static void append_chat_message(lv_event_t *event)
+struct chat_panel {
+    struct app_chat *backend;
+    lv_obj_t *history, *input, *peers;
+    lv_timer_t *timer;
+    unsigned pending;
+};
+
+static void chat_line(struct chat_panel *panel, const char *text)
 {
-    lv_obj_t *input = lv_event_get_target_obj(event);
-    lv_obj_t *history = lv_event_get_user_data(event);
-    const char *text = lv_textarea_get_text(input);
-    bool nonempty = false;
-    for (const char *p = text; *p; ++p) {
-        if (*p != ' ' && *p != '\t' && *p != '\r' && *p != '\n') nonempty = true;
-    }
-    if (!nonempty) return;
-    /* Bound memory usage while retaining enough messages to test scrolling. */
+    lv_obj_t *history = panel->history;
     if (lv_obj_get_child_count(history) >= 100)
         lv_obj_delete(lv_obj_get_child(history, 0));
     lv_obj_t *message = lv_label_create(history);
@@ -567,9 +782,70 @@ static void append_chat_message(lv_event_t *event)
     lv_label_set_long_mode(message, LV_LABEL_LONG_MODE_WRAP);
     lv_label_set_text(message, text);
     apply_neon_theme(message);
-    lv_textarea_set_text(input, "");
     lv_obj_update_layout(history);
     lv_obj_scroll_to_view(message, LV_ANIM_OFF);
+}
+
+static void chat_event(void *context, const char *type, unsigned request, const char *text)
+{
+    struct chat_panel *panel = context;
+    if (!strcmp(type, "STATE")) {
+        /* Show diagnostics only when explicitly requested with /status or /secret. */
+        if (request && request == panel->pending) chat_line(panel, text);
+    }
+    else if (!strcmp(type, "PEERS")) {
+        char line[1024];
+        snprintf(line, sizeof(line), "Participants: %s", *text ? text : "none");
+        lv_label_set_text(panel->peers, line);
+    } else if (!strcmp(type, "CHAT") || !strcmp(type, "NOTICE") ||
+               !strcmp(type, "GAP") || !strcmp(type, "ERROR")) chat_line(panel, text);
+    if (request && request == panel->pending &&
+        (!strcmp(type, "OK") || !strcmp(type, "ERROR") || !strcmp(type, "STATE"))) {
+        if (strcmp(type, "ERROR")) lv_textarea_set_text(panel->input, "");
+        panel->pending = 0;
+        lv_obj_remove_state(panel->input, LV_STATE_DISABLED);
+    }
+}
+
+static void chat_tick(lv_timer_t *timer)
+{
+    struct chat_panel *panel = lv_timer_get_user_data(timer);
+    app_chat_poll(panel->backend);
+}
+
+static void delete_chat(lv_event_t *event)
+{
+    struct chat_panel *panel = lv_event_get_user_data(event);
+    if (panel->timer) lv_timer_delete(panel->timer);
+    app_chat_destroy(panel->backend);
+    free(panel);
+}
+
+static void mask_chat_secret(lv_event_t *event)
+{
+    lv_obj_t *input = lv_event_get_target_obj(event);
+    bool secret = !strncmp(lv_textarea_get_text(input), "/secret ", 8);
+    if (lv_textarea_get_password_mode(input) != secret)
+        lv_textarea_set_password_mode(input, secret);
+}
+
+static void append_chat_message(lv_event_t *event)
+{
+    struct chat_panel *panel = lv_event_get_user_data(event);
+    if (panel->pending) return;
+    const char *text = lv_textarea_get_text(panel->input);
+    bool nonempty = false;
+    for (const char *p = text; *p; ++p)
+        if (*p != ' ' && *p != '\t' && *p != '\r' && *p != '\n') nonempty = true;
+    if (!nonempty) return;
+    char error[192];
+    panel->pending = app_chat_submit(panel->backend, text, error, sizeof(error));
+    if (!panel->pending) chat_line(panel, error);
+    else {
+        /* Never retain a submitted secret in the entry or chat history. */
+        if (!strncmp(text, "/secret ", 8)) lv_textarea_set_text(panel->input, "");
+        lv_obj_add_state(panel->input, LV_STATE_DISABLED);
+    }
 }
 
 lv_obj_t *app_ui_create(lv_obj_t *screen)
@@ -616,15 +892,32 @@ lv_obj_t *app_ui_create(lv_obj_t *screen)
     lv_obj_set_width(input, LV_PCT(100));
     lv_textarea_set_one_line(input, true);
     lv_textarea_set_max_length(input, 512);
-    lv_textarea_set_placeholder_text(input, "Type a message; Enter to add locally");
+    lv_textarea_set_placeholder_text(input, "Message, /msg NAME text, /who, /secret");
+    lv_textarea_set_password_show_time(input, 0);
     lv_textarea_set_text(input, "");
-    lv_obj_add_event_cb(input, append_chat_message, LV_EVENT_READY, history);
+    struct chat_panel *chat = calloc(1, sizeof(*chat));
+    if (chat) {
+        chat->history = history;
+        chat->input = input;
+        chat->peers = lv_label_create(status);
+        lv_obj_set_width(chat->peers, LV_PCT(100));
+        lv_label_set_long_mode(chat->peers, LV_LABEL_LONG_MODE_DOTS);
+        lv_label_set_text(chat->peers, "Participants: unavailable");
+        const char *socket_path = getenv("UTXTRELAY_SOCKET");
+        chat->backend = app_chat_create(socket_path ? socket_path : "/run/utxtrelay/console.sock", chat_event, chat);
+        chat->timer = lv_timer_create(chat_tick, 100, chat);
+        lv_obj_add_event_cb(status, delete_chat, LV_EVENT_DELETE, chat);
+        lv_obj_add_event_cb(input, append_chat_message, LV_EVENT_READY, chat);
+        lv_obj_add_event_cb(input, mask_chat_secret, LV_EVENT_VALUE_CHANGED, NULL);
+        if (!chat->backend) chat_line(chat, "Unable to initialize chat connector");
+    } else lv_obj_add_state(input, LV_STATE_DISABLED);
     lv_obj_set_flex_flow(settings, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_scrollable(settings, true);
     lv_obj_set_scroll_dir(settings, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(settings, LV_SCROLLBAR_MODE_AUTO);
     lv_obj_set_scroll_chain(settings, false);
     lv_obj_set_style_pad_row(settings, 10, 0);
+    lv_obj_add_event_cb(settings, settings_scrolled, LV_EVENT_SCROLL, NULL);
     int loaded = app_settings_load("/etc/default/udpptt", &saved_settings);
     const char *field_labels[] = {"Transmit ID", "dpi ID", "preamble ID"};
     const char *values[] = {saved_settings.txid, saved_settings.dpi_id, saved_settings.preamble};
@@ -662,6 +955,11 @@ lv_obj_t *app_ui_create(lv_obj_t *screen)
     }
     create_volume_controls(settings);
     create_operation_modes(settings);
+    preamble_checkbox = lv_checkbox_create(settings);
+    lv_checkbox_set_text(preamble_checkbox, "Audio PTT preamble");
+    lv_obj_set_scroll_on_focus(preamble_checkbox, false);
+    if (saved_settings.preamble_enabled) lv_obj_add_state(preamble_checkbox, LV_STATE_CHECKED);
+    lv_obj_add_event_cb(preamble_checkbox, select_preamble, LV_EVENT_VALUE_CHANGED, NULL);
     lv_obj_t *system_title = lv_label_create(settings);
     lv_label_set_text(system_title, "System settings");
     lv_obj_set_style_text_font(system_title, &lv_font_montserrat_20, 0);
@@ -669,6 +967,9 @@ lv_obj_t *app_ui_create(lv_obj_t *screen)
     lv_checkbox_set_text(saver_checkbox, "Screen saver");
     if (saved_settings.screensaver) lv_obj_add_state(saver_checkbox, LV_STATE_CHECKED);
     lv_obj_set_scroll_on_focus(saver_checkbox, false);
+    create_audio_modes(settings);
+    if (!audio_timer) lv_obj_add_state(preamble_checkbox, LV_STATE_DISABLED);
+    create_network_status(settings);
     lv_obj_t *actions = lv_obj_create(settings);
     lv_obj_set_size(actions, LV_PCT(100), 48);
     lv_obj_set_style_pad_all(actions, 0, 0);
@@ -676,6 +977,19 @@ lv_obj_t *app_ui_create(lv_obj_t *screen)
     lv_obj_set_scrollable(actions, false);
     lv_obj_set_flex_flow(actions, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(actions, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(actions, 12, 0);
+    poweroff_button = lv_button_create(actions);
+    lv_obj_set_size(poweroff_button, 130, 40);
+    lv_obj_set_scroll_on_focus(poweroff_button, false);
+    lv_obj_t *poweroff_label = lv_label_create(poweroff_button);
+    lv_label_set_text(poweroff_label, "Poweroff");
+    lv_obj_center(poweroff_label);
+    lv_timer_t *poweroff_timer = lv_timer_create(poweroff_result, 100, NULL);
+    if (poweroff_timer) {
+        lv_timer_pause(poweroff_timer);
+        lv_obj_add_event_cb(poweroff_button, request_poweroff, LV_EVENT_CLICKED, poweroff_timer);
+        lv_obj_add_event_cb(poweroff_button, delete_poweroff_timer, LV_EVENT_DELETE, poweroff_timer);
+    } else lv_obj_add_state(poweroff_button, LV_STATE_DISABLED);
     save_button = lv_button_create(actions);
     lv_obj_set_size(save_button, 110, 40);
     lv_obj_set_scroll_on_focus(save_button, false);
