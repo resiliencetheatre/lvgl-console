@@ -243,8 +243,8 @@ means the connector wrote it to UDP, not that any recipient received it.
 No on-screen keyboard is created and no chat history is stored on disk.
 
 The PocketTerm overlay enables `utxtrelay-console-client.service` before
-`lvgl-console.service`, which runs the console launcher. The former
-`lvgl-com.service` name is an alias of this service. Configure the server, port,
+`lvgl-console.service`, which runs the console launcher. The PocketTerm build
+removes the former `lvgl-com.service` unit and enablement link. Configure the server, port,
 unique nickname and room in `/etc/default/utxtrelay`, then restart the connector.
 The default server `127.0.0.1` is a placeholder, with no relay server autostart.
 The UI package alone still installs no service; these units are overlay-specific.
@@ -341,3 +341,8 @@ Network status snapshots are sorted so interface/address enumeration order does
 not trigger redraws. Refreshes are deferred while Settings is scrolling and for
 500 ms afterward, and while the address list is off-screen. Transient read
 failures retain the last snapshot instead of collapsing and expanding the list.
+
+Display rotation can be selected with `LV_DISPLAY_ROTATION=0`, `90`, `180`,
+or `270` (clockwise degrees, default `0`). The framebuffer driver rotates pixels
+in software; LVGL adjusts the logical display dimensions and pointer coordinates.
+For example: `LV_DISPLAY_ROTATION=90 /usr/bin/lvgl-console-launcher`.

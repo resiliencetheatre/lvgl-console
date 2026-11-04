@@ -23,6 +23,7 @@ int main(int argc, char **argv)
         if (argc == 2 && strcmp(argv[1], "--help") == 0) {
             puts("Usage: lvgl-console\n"
                  "  LV_LINUX_FBDEV_DEVICE: framebuffer (default /dev/fb0)\n"
+                 "  LV_DISPLAY_ROTATION: clockwise degrees: 0, 90, 180, 270 (default 0)\n"
                  "  LV_LINUX_EVDEV_DEVICE: pointer/touch device (default /dev/input/touchscreen)\n"
                  "  LV_LINUX_KEYBOARD_DEVICE: single keyboard override (default all typing keyboards, hotplug)");
             return EXIT_SUCCESS;
@@ -32,6 +33,18 @@ int main(int argc, char **argv)
     }
     signal(SIGINT, stop);
     signal(SIGTERM, stop);
+    const char *rotation = getenv("LV_DISPLAY_ROTATION");
+    lv_display_rotation_t display_rotation = LV_DISPLAY_ROTATION_0;
+    if (rotation && *rotation) {
+        /* fbdev rotates the pixel buffer opposite LVGL's display angle. */
+        if (strcmp(rotation, "90") == 0) display_rotation = LV_DISPLAY_ROTATION_270;
+        else if (strcmp(rotation, "180") == 0) display_rotation = LV_DISPLAY_ROTATION_180;
+        else if (strcmp(rotation, "270") == 0) display_rotation = LV_DISPLAY_ROTATION_90;
+        else if (strcmp(rotation, "0") != 0) {
+            fprintf(stderr, "LV_DISPLAY_ROTATION must be 0, 90, 180 or 270\n");
+            return EXIT_FAILURE;
+        }
+    }
     lv_init();
     const char *fb = getenv("LV_LINUX_FBDEV_DEVICE");
     const char *input = getenv("LV_LINUX_EVDEV_DEVICE");
@@ -43,6 +56,7 @@ int main(int argc, char **argv)
         lv_deinit();
         return EXIT_FAILURE;
     }
+    lv_display_set_rotation(display, display_rotation);
     lv_indev_t *touch = lv_evdev_create(LV_INDEV_TYPE_POINTER, input);
     if (touch) lv_indev_set_display(touch, display);
     else fprintf(stderr, "Unable to open input %s; continuing without touch input\n", input);
