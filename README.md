@@ -346,3 +346,56 @@ Display rotation can be selected with `LV_DISPLAY_ROTATION=0`, `90`, `180`,
 or `270` (clockwise degrees, default `0`). The framebuffer driver rotates pixels
 in software; LVGL adjusts the logical display dimensions and pointer coordinates.
 For example: `LV_DISPLAY_ROTATION=90 /usr/bin/lvgl-console-launcher`.
+
+## Settings: system updates
+
+Settings now has a System update panel backed by the local update API. It displays
+installed/offered versions, availability/errors, download bytes and percentage,
+and SWUpdate image/step percentage when supplied by the service. Missing service
+or network errors are shown without blocking the LVGL event loop. A dedicated
+worker handles bounded Unix RPC; only the UI thread touches LVGL objects.
+
+- **Check for updates** explicitly requests a signed remote metadata check. Opening
+  Settings does not check the remote server; background polling reads local status.
+- **Update** opens a release-specific download confirmation, including version,
+  size and notes. Cancel does nothing; accept downloads that exact offer.
+- After download verification/flush, **Install update** opens a separate
+  install-and-restart confirmation. Download completion never auto-installs.
+- Installation disables both actions. Keep power connected. Verification and final
+  flush/readback are shown as stages, not fake percentages. The service receives
+  read-only SWUpdate progress for the pinned ABI and remains authoritative.
+- Trial/unconfirmed state blocks new update actions. A committed trial still needs
+  an ordinary reboot before another update, as with the existing CLI workflow.
+
+The panel uses `/run/reterminal-update-api/control.sock` by default;
+`RETERMINAL_UPDATE_SOCKET` selects a different local socket for lab testing. It
+never invokes SWUpdate, systemctl or network download tools itself. It cannot
+choose partition devices or bypass service signature/slot checks. Keyboard focus
+includes the new controls and confirmation buttons.
+
+The native build now requires json-c development headers/pkg-config metadata
+(for example `libjson-c-dev` on Debian). Buildroot package dependencies are updated
+in rpi-extree. Rebuild local LVGL sources with `lvgl-console-local-dirclean` before
+the complete image build; both the new application and updated API/progress module
+must be included in the same release. Do not run that against an output currently
+building. The local CLI remains available independently of this panel.
+
+The A/B profile requests the configured API service alongside LVGL. It starts only
+when `/etc/default/reterminal-updates.json` exists, performs no automatic remote
+check and creates no HTTP listener. LVGL is deliberately not ordered after the API:
+trial health needs LVGL running before the API starts. Profiles without that
+service continue to run and show the updater as unavailable.
+
+Native tests include `update-client` (JSON model, socket framing via socketpairs,
+worker lifecycle, stale-offer/consent checks) and `update-panel` (disabled states,
+review/cancel, changed offers and separate install confirmation). These never
+invoke a real installer or reboot. Device touch/layout, download progress, SWUpdate
+progress timing and end-to-end update validation remain hardware checks. Browser
+integration is still a separate stage.
+
+
+The System update section uses borderless containers while retaining button
+styling. A committed trial shows **Finish update**. Confirm **Restart** to request
+an ordinary reboot through the local update API, or choose **Later** to keep using
+the device. This requires the matching API implementation in the same release;
+new installations remain disabled until the normal reboot completes.

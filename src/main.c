@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <time.h>
 
 #if LVGL_VERSION_MAJOR != 9 || LVGL_VERSION_MINOR != 6 || LVGL_VERSION_PATCH != 0
 #error "lvgl-console requires LVGL 9.6.0"
@@ -73,13 +74,27 @@ int main(int argc, char **argv)
     app_ui_add_settings_to_group(keyboard_group);
     AppKeyboards *keyboards = app_keyboards_start(getenv("LV_LINUX_KEYBOARD_DEVICE"), keyboard_group, display);
     if (!keyboards) fprintf(stderr, "Unable to initialize keyboard discovery\n");
+    const char *ready_path = getenv("LV_AB_READY");
+    time_t last_ready = 0;
     while (running) {
         /* fbdev supplies LVGL's monotonic tick callback. */
         uint32_t delay = lv_timer_handler();
+        /* Only signal after the real display, required touch, and UI initialized.
+         * Refresh from the UI loop so a hung process cannot confirm a trial. */
+        time_t now = time(NULL);
+        if (ready_path && touch && now != last_ready) {
+            FILE *ready = fopen(ready_path, "w");
+            if (ready) {
+                fprintf(ready, "%ld\n", (long)getpid());
+                fclose(ready);
+            }
+            last_ready = now;
+        }
         if (delay == LV_NO_TIMER_READY || delay > 20) delay = 20;
         if (delay < 1) delay = 1;
         usleep(delay * 1000);
     }
+    if (ready_path) unlink(ready_path);
     app_keyboards_stop(keyboards);
     app_ui_resume_display();
     lv_deinit();
