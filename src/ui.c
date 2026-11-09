@@ -6,6 +6,7 @@
 #include "settings.h"
 #include "volume.h"
 #include "update_panel.h"
+#include "versions.h"
 #include <alsa/asoundlib.h>
 #include <errno.h>
 #include <math.h>
@@ -698,82 +699,7 @@ void app_ui_resume_display(void)
     lv_refr_now(display);
 }
 
-/* Keep the palette here so every tab and nested widget uses the same theme. */
-#define NEON_GREEN 0x39FF14
-#define DIM_GREEN 0x103D08
-
-static void apply_neon_theme(lv_obj_t *obj)
-{
-    const lv_color_t green = lv_color_hex(NEON_GREEN);
-    const lv_style_selector_t states[] = {
-        LV_STATE_DEFAULT, LV_STATE_PRESSED, LV_STATE_CHECKED,
-        LV_STATE_FOCUSED, LV_STATE_FOCUS_KEY, LV_STATE_EDITED,
-        LV_STATE_HOVERED, LV_STATE_DISABLED
-    };
-    for (unsigned i = 0; i < sizeof(states) / sizeof(states[0]); ++i) {
-        lv_style_selector_t state = states[i];
-        lv_obj_set_style_recolor_opa(obj, LV_OPA_TRANSP, state);
-        lv_obj_set_style_bg_color(obj, lv_color_black(), state);
-        lv_obj_set_style_bg_grad_dir(obj, LV_GRAD_DIR_NONE, state);
-        lv_obj_set_style_text_color(obj, green, state);
-        lv_obj_set_style_border_color(obj, green, state);
-        lv_obj_set_style_outline_color(obj, green, state);
-        lv_obj_set_style_shadow_color(obj, green, state);
-        lv_obj_set_style_shadow_width(obj, 0, state);
-        lv_obj_set_style_bg_color(obj, green, LV_PART_SCROLLBAR | state);
-        lv_obj_set_style_border_color(obj, green, LV_PART_SCROLLBAR | state);
-    }
-    if (lv_obj_check_type(obj, &lv_button_class)) {
-        lv_obj_set_style_border_width(obj, 1, 0);
-        lv_obj_set_style_border_opa(obj, LV_OPA_COVER, 0);
-        lv_obj_set_style_border_width(obj, 3, LV_STATE_CHECKED);
-        /* Focus remains after touch release and outranks CHECKED in LVGL.
-         * Keep the selected fill for every combined interaction state. */
-        for (unsigned i = 0; i < sizeof(states) / sizeof(states[0]); ++i) {
-            lv_style_selector_t selected = LV_STATE_CHECKED | states[i];
-            lv_obj_set_style_bg_color(obj, lv_color_hex(DIM_GREEN), selected);
-            lv_obj_set_style_bg_opa(obj, LV_OPA_COVER, selected);
-        }
-        lv_obj_set_style_bg_color(obj, lv_color_hex(DIM_GREEN), LV_STATE_PRESSED);
-        lv_obj_set_style_bg_opa(obj, LV_OPA_COVER, LV_STATE_PRESSED);
-        lv_obj_set_style_shadow_width(obj, 12, LV_STATE_PRESSED);
-        lv_obj_set_style_shadow_opa(obj, LV_OPA_50, LV_STATE_PRESSED);
-    }
-    if (lv_obj_check_type(obj, &lv_roller_class)) {
-        lv_obj_set_style_border_width(obj, 1, 0);
-        lv_obj_set_style_border_side(obj, LV_BORDER_SIDE_FULL, 0);
-        lv_obj_set_style_border_opa(obj, LV_OPA_COVER, 0);
-        lv_obj_set_style_bg_color(obj, lv_color_hex(DIM_GREEN), LV_PART_SELECTED);
-        lv_obj_set_style_bg_opa(obj, LV_OPA_COVER, LV_PART_SELECTED);
-        lv_obj_set_style_text_color(obj, green, LV_PART_SELECTED);
-        lv_obj_set_style_border_color(obj, green, LV_PART_SELECTED);
-    }
-    if (lv_obj_check_type(obj, &lv_textarea_class)) {
-        lv_obj_set_style_text_color(obj, green, LV_PART_TEXTAREA_PLACEHOLDER);
-        /* Cursor geometry/opacity must be explicit, not dependent on the
-         * theme's focus-only cursor style. Match its focused selectors too. */
-        for (unsigned i = 0; i < sizeof(states) / sizeof(states[0]); ++i) {
-            lv_style_selector_t cursor = LV_PART_CURSOR | states[i];
-            lv_obj_set_style_bg_opa(obj, LV_OPA_TRANSP, cursor);
-            lv_obj_set_style_border_color(obj, green, cursor);
-            lv_obj_set_style_border_width(obj, 2, cursor);
-            lv_obj_set_style_border_side(obj, LV_BORDER_SIDE_LEFT, cursor);
-            lv_obj_set_style_border_opa(obj, LV_OPA_COVER, cursor);
-            lv_obj_set_style_opa(obj, LV_OPA_COVER, cursor);
-            lv_obj_set_style_pad_all(obj, 0, cursor);
-            lv_obj_set_style_anim_duration(obj, 0, cursor);
-        }
-        lv_obj_set_style_bg_color(obj, green, LV_PART_SELECTED);
-        lv_obj_set_style_text_color(obj, lv_color_black(), LV_PART_SELECTED);
-    }
-    if (lv_obj_check_type(obj, &lv_image_class)) {
-        /* Recolor at draw time, preserving the logo's transparent pixels. */
-        lv_obj_set_style_image_recolor(obj, green, 0);
-        lv_obj_set_style_image_recolor_opa(obj, LV_OPA_COVER, 0);
-    }
-    for (uint32_t i = 0; i < lv_obj_get_child_count(obj); ++i)
-        apply_neon_theme(lv_obj_get_child(obj, i));
-}
+#include "neon_theme.h"
 
 struct chat_panel {
     struct app_chat *backend;
@@ -1002,7 +928,6 @@ lv_obj_t *app_ui_create(lv_obj_t *screen)
     create_audio_modes(settings);
     if (!audio_timer) lv_obj_add_state(preamble_checkbox, LV_STATE_DISABLED);
     create_network_status(settings);
-    update_panel = app_update_panel_create(settings);
     lv_obj_t *actions = lv_obj_create(settings);
     lv_obj_set_size(actions, LV_PCT(100), 48);
     lv_obj_set_style_pad_all(actions, 0, 0);
@@ -1033,6 +958,17 @@ lv_obj_t *app_ui_create(lv_obj_t *screen)
     save_feedback = lv_label_create(settings);
     lv_obj_set_width(save_feedback, LV_PCT(100));
     lv_label_set_text(save_feedback, loaded ? "Configuration unavailable; defaults shown." : "");
+    lv_obj_t *versions_title = lv_label_create(settings);
+    lv_label_set_text(versions_title, "Versions");
+    lv_obj_set_style_text_font(versions_title, &lv_font_montserrat_20, 0);
+    lv_obj_t *versions_text = lv_label_create(settings);
+    lv_obj_set_width(versions_text, LV_PCT(100));
+    lv_obj_set_style_text_align(versions_text, LV_TEXT_ALIGN_LEFT, 0);
+    lv_obj_set_style_text_font(versions_text, &lv_font_montserrat_16, 0);
+    char versions[1024];
+    app_versions_read(versions, sizeof(versions));
+    lv_label_set_text(versions_text, versions);
+    update_panel = app_update_panel_create(settings);
     lv_timer_t *saver_timer = lv_timer_create(saver_tick, 250, lv_obj_get_display(screen));
     if (saver_timer) lv_obj_add_event_cb(screen, delete_saver_timer, LV_EVENT_DELETE, saver_timer);
     /* No virtual keyboard is created. */

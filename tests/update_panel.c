@@ -32,6 +32,15 @@ static void visible_button(const char *caption)
 {
     lv_obj_update_layout(lv_layer_top());
     lv_obj_t *button=find(lv_layer_top(),caption); assert(button);
+    const lv_style_selector_t states[]={LV_STATE_DEFAULT,LV_STATE_FOCUSED,LV_STATE_PRESSED};
+    for(unsigned i=0;i<sizeof(states)/sizeof(states[0]);++i) {
+        lv_obj_remove_state(button,LV_STATE_FOCUSED|LV_STATE_PRESSED);
+        lv_obj_add_state(button,states[i]);
+        assert(lv_color_eq(lv_obj_get_style_text_color(button,0),lv_color_hex(0x39FF14)));
+        assert(lv_color_eq(lv_obj_get_style_bg_color(button,0),
+                          lv_color_hex(states[i]==LV_STATE_PRESSED ? 0x103D08 : 0x000000)));
+    }
+    lv_obj_remove_state(button,LV_STATE_FOCUSED|LV_STATE_PRESSED);
     lv_area_t area;lv_obj_get_coords(button,&area);
     assert(area.y1>=0 && area.y2<lv_display_get_vertical_resolution(NULL));
     for(lv_obj_t *parent=lv_obj_get_parent(button);parent;parent=lv_obj_get_parent(parent)) {

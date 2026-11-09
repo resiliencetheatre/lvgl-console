@@ -399,3 +399,13 @@ styling. A committed trial shows **Finish update**. Confirm **Restart** to reque
 an ordinary reboot through the local update API, or choose **Later** to keep using
 the device. This requires the matching API implementation in the same release;
 new installations remain disabled until the normal reboot completes.
+
+### Settings versions and section order
+
+Poweroff and Save precede a read-only Versions section, followed by System update.
+Versions lists the running kernel release and kernel build string (including its
+compilation timestamp when supplied by the kernel), runtime glibc, GStreamer and
+OpenSSL. Library versions are queried locally without spawning commands; optional
+missing libraries report unavailable. The kernel build date is not the application
+or release packaging date. Versions and System update align with Network status
+and use the existing green-on-black theme.

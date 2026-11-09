@@ -275,8 +275,21 @@ int main(void)
     lv_obj_get_coords(input, &input_area);
     lv_obj_get_coords(bar, &bar_area);
     if (input_area.y2 >= bar_area.y1) return EXIT_FAILURE;
+    /* Versions and the left-aligned updater follow the action buttons. */
+    unsigned settings_count = lv_obj_get_child_count(settings_tab);
+    lv_obj_t *versions_title = lv_obj_get_child(settings_tab, settings_count - 3);
+    lv_obj_t *versions_text = lv_obj_get_child(settings_tab, settings_count - 2);
+    lv_obj_t *updates = lv_obj_get_child(settings_tab, settings_count - 1);
+    if (strcmp(lv_label_get_text(versions_title), "Versions") ||
+        !strstr(lv_label_get_text(versions_text), "Kernel build:") ||
+        !strstr(lv_label_get_text(versions_text), "GStreamer:") ||
+        !strstr(lv_label_get_text(versions_text), "OpenSSL:") ||
+        strcmp(lv_label_get_text(lv_obj_get_child(updates, 0)), "System update") ||
+        lv_obj_get_style_pad_left(updates, 0) != 0 ||
+        lv_obj_get_style_text_align(updates, 0) != LV_TEXT_ALIGN_LEFT)
+        return EXIT_FAILURE;
     /* Exercise shutdown only through mocked process calls. */
-    lv_obj_t *actions = lv_obj_get_child(settings_tab, lv_obj_get_child_count(settings_tab) - 2);
+    lv_obj_t *actions = lv_obj_get_child(settings_tab, lv_obj_get_child_count(settings_tab) - 5);
     lv_obj_t *poweroff = lv_obj_get_child(actions, 0);
     lv_obj_t *save = lv_obj_get_child(actions, 1);
     lv_obj_update_layout(screen);

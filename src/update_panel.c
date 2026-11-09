@@ -1,5 +1,6 @@
 #include "update_panel.h"
 #include "update_client.h"
+#include "neon_theme.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -85,24 +86,38 @@ static void confirm(lv_event_t *event)
     lv_obj_set_style_pad_all(box,12,0); lv_obj_set_style_border_width(box,0,0);
     lv_obj_set_style_bg_color(box,lv_color_hex(0x081A05),0);
     lv_obj_set_style_text_color(box,lv_color_hex(0x39FF14),0);
-    lv_obj_t *title=lv_label_create(box); lv_obj_set_width(title,LV_PCT(100));
-    lv_label_set_text_fmt(title,"%s %s?",state.can_finish ? "Finish update" : state.download_ready ? "Install" : "Download",state.offer_version);
     lv_obj_t *body=lv_obj_create(box);
     lv_obj_set_width(body,LV_PCT(100)); lv_obj_set_height(body,0);
     lv_obj_set_flex_grow(body,1); lv_obj_set_scroll_dir(body,LV_DIR_VER);
     lv_obj_set_style_pad_all(body,0,0); lv_obj_set_style_border_width(body,0,0);
     lv_obj_set_style_bg_opa(body,LV_OPA_TRANSP,0);
-    lv_obj_t *description=lv_label_create(body); lv_obj_set_width(description,LV_PCT(100));
+    /* Fill short confirmations vertically; let long notes grow and scroll.
+     * Keep the action footer outside this viewport. */
+    lv_obj_t *content=lv_obj_create(body);
+    lv_obj_set_size(content,LV_PCT(100),LV_SIZE_CONTENT);
+    lv_obj_set_style_min_height(content,LV_PCT(100),0);
+    lv_obj_set_style_pad_all(content,0,0);
+    lv_obj_set_style_border_width(content,0,0);
+    lv_obj_set_scrollable(content,false);
+    lv_obj_set_flex_flow(content,LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(content,LV_FLEX_ALIGN_CENTER,LV_FLEX_ALIGN_CENTER,LV_FLEX_ALIGN_CENTER);
+    lv_obj_t *title=lv_label_create(content); lv_obj_set_width(title,LV_PCT(100));
+    lv_label_set_text_fmt(title,"%s %s?",state.can_finish ? "Finish update" : state.download_ready ? "Install" : "Download",state.offer_version);
+    lv_obj_set_style_text_align(title,LV_TEXT_ALIGN_CENTER,0);
+    lv_obj_t *description=lv_label_create(content); lv_obj_set_width(description,LV_PCT(100));
     lv_label_set_text_fmt(description,"%.1f MiB\n%s\n\n%s",(double)state.offer_size/1048576.0,state.notes,
         state.can_finish ? "Update confirmed. Restart normally to finish. Keep power connected." :
         state.download_ready ? "The device will restart after installation. Keep power connected." :
         "Download this signed release now. Installation will require a separate confirmation.");
     lv_label_set_recolor(description,false);
+    lv_obj_set_style_text_align(description,LV_TEXT_ALIGN_CENTER,0);
     lv_obj_t *row=lv_obj_create(box); lv_obj_set_size(row,LV_PCT(100),60);
     lv_obj_set_style_pad_all(row,4,0); lv_obj_set_style_border_width(row,0,LV_STATE_DEFAULT);
     lv_obj_set_flex_flow(row,LV_FLEX_FLOW_ROW); lv_obj_set_scrollable(row,false);
     lv_obj_t *no=button(row,state.can_finish ? "Later" : "Cancel",cancel,p);
     lv_obj_t *yes=button(row,state.can_finish ? "Restart" : state.download_ready ? "Install and restart" : "Download",accept,p);
+    apply_neon_theme(p->dialog);
+    lv_obj_set_style_bg_opa(box,LV_OPA_COVER,0);
     if (p->group) { lv_group_add_obj(p->group,no); lv_group_add_obj(p->group,yes); lv_group_focus_obj(no); }
     lv_timer_ready(p->timer);
 }
@@ -119,6 +134,8 @@ lv_obj_t *app_update_panel_create(lv_obj_t *parent)
     p->root=lv_obj_create(parent); lv_obj_set_user_data(p->root,p);
     lv_obj_set_size(p->root,LV_PCT(100),LV_SIZE_CONTENT);
     lv_obj_set_style_border_width(p->root,0,LV_STATE_DEFAULT);
+    lv_obj_set_style_pad_all(p->root,0,0);
+    lv_obj_set_style_text_align(p->root,LV_TEXT_ALIGN_LEFT,0);
     lv_obj_set_flex_flow(p->root,LV_FLEX_FLOW_COLUMN); lv_obj_set_scrollable(p->root,false);
     lv_obj_t *title=lv_label_create(p->root); lv_label_set_text(title,"System update");
     lv_obj_set_style_text_font(title,&lv_font_montserrat_20,0);
