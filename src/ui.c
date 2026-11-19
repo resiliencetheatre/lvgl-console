@@ -2,6 +2,7 @@
 #include "chat_backend.h"
 #include "ping_status.h"
 #include "network_status.h"
+#include "wifi_panel.h"
 #include "ptt_status.h"
 #include "settings.h"
 #include "volume.h"
@@ -280,6 +281,7 @@ static void create_ping_panel(lv_obj_t *screen)
 #define SCREENSAVER_IDLE_MS 60000
 static app_settings saved_settings;
 static lv_obj_t *update_panel;
+static lv_obj_t *wifi_panel;
 static lv_obj_t *settings_fields[3], *saver_checkbox, *save_button, *save_feedback;
 static lv_obj_t *server_input, *operation_modes[4], *poweroff_button;
 static pid_t poweroff_pid = -1;
@@ -678,6 +680,7 @@ void app_ui_add_settings_to_group(lv_group_t *group)
     lv_group_add_obj(group, preamble_checkbox);
     lv_group_add_obj(group, saver_checkbox);
     for (unsigned i = 0; i < 2; ++i) lv_group_add_obj(group, audio_modes[i]);
+    app_wifi_panel_add_to_group(wifi_panel, group);
     lv_group_add_obj(group, poweroff_button);
     lv_group_add_obj(group, save_button);
     app_update_panel_add_to_group(update_panel, group);
@@ -928,6 +931,7 @@ lv_obj_t *app_ui_create(lv_obj_t *screen)
     create_audio_modes(settings);
     if (!audio_timer) lv_obj_add_state(preamble_checkbox, LV_STATE_DISABLED);
     create_network_status(settings);
+    wifi_panel = app_wifi_panel_create(settings);
     lv_obj_t *actions = lv_obj_create(settings);
     lv_obj_set_size(actions, LV_PCT(100), 48);
     lv_obj_set_style_pad_all(actions, 0, 0);

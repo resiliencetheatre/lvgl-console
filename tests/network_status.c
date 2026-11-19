@@ -33,7 +33,7 @@ int main(void)
     entries[4].ifa_flags = 0;
     char *text = app_network_status_read();
     const char *expected = "dummy0:No IP [DOWN]\neth0:192.0.2.10 [UP]\neth0:[2001:db8::10] [UP]\nwlan0:No IP [DOWN]";
-    if (!text || strcmp(text, expected)) {
+    if (!text || strncmp(text, expected, strlen(expected)) || !strstr(text,"\nDefault route: IPv4 ")) {
         fprintf(stderr, "Unexpected network snapshot: %s\n", text ? text : "NULL");
         free(text);
         return EXIT_FAILURE;
@@ -46,8 +46,21 @@ int main(void)
     entries[2].ifa_next = &entries[1];
     entries[1].ifa_next = NULL;
     text = app_network_status_read();
-    if (!text || strcmp(text, expected)) { free(text); return EXIT_FAILURE; }
+    if (!text || strncmp(text, expected, strlen(expected)) || !strstr(text,"\nDefault route: IPv4 ")) { free(text); return EXIT_FAILURE; }
     free(text);
+    FILE *v4=tmpfile(), *v6=tmpfile();
+    if (!v4 || !v6) return EXIT_FAILURE;
+    fputs("Iface Destination Gateway Flags RefCnt Use Metric Mask\n"
+          "wlan0 00000000 010200C0 0003 0 0 600 00000000\n"
+          "eth0 00000000 010200C0 0003 0 0 100 00000000\n"
+          "bad0 00000000 00000000 0201 0 0 0 00000000\n",v4);
+    fputs("00000000000000000000000000000000 00 00000000000000000000000000000000 00 fe800000000000000000000000000001 00000400 00000000 00000000 00000003 wlan0\n",v6);
+    rewind(v4); rewind(v6);
+    char routes[160]; app_network_default_routes(v4,v6,routes,sizeof(routes));
+    fclose(v4); fclose(v6);
+    if (strcmp(routes,"Default route: IPv4 eth0; IPv6 wlan0")) return EXIT_FAILURE;
+    app_network_default_routes(NULL,NULL,routes,sizeof(routes));
+    if (strcmp(routes,"Default route: IPv4 none; IPv6 none")) return EXIT_FAILURE;
     unavailable = 1;
     text = app_network_status_read();
     if (text) { free(text); return EXIT_FAILURE; }

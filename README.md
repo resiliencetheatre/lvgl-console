@@ -409,3 +409,76 @@ OpenSSL. Library versions are queried locally without spawning commands; optiona
 missing libraries report unavailable. The kernel build date is not the application
 or release packaging date. Versions and System update align with Network status
 and use the existing green-on-black theme.
+
+## Wifi settings
+
+Settings contains a separate **Wifi** section immediately below **Network status**.
+Network status includes the lowest-metric main-table default-route interface for
+IPv4 and IPv6 (policy routing is not evaluated).
+
+Select **Scan**, choose a network, enter its PSK/password and select **Connect**.
+The PSK field displays all characters intentionally. It accepts up to 64 characters
+and is cleared after submitting an action or changing the selected network.
+Known networks can reconnect with an empty field using iwd's saved credentials.
+The list shows security, signal strength, saved status and current connection.
+**Disconnect** disconnects the station and suppresses iwd autoconnection until a
+subsequent explicit connection; **Forget network** removes the selected network's
+saved iwd profile. Scan and connect are explicit actions; opening Settings only
+reads the current iwd state. Only open and PSK networks are supported. Multiple
+station adapters are reported as ambiguous rather than choosing one silently.
+
+The client uses the system D-Bus iwd API on a worker thread; LVGL never performs
+D-Bus calls. The application needs permission to call iwd (the existing PocketTerm
+service runs as root). Build with libsystemd development files for Wifi support;
+without libsystemd the panel reports support unavailable. The local Buildroot
+package adds systemd as a dependency on systemd profiles. iwd performs association
+and credential storage; systemd-networkd remains responsible for IP configuration.
+Association success does not establish Internet reachability: inspect Network
+status for addresses. Missing iwd/adapter does not prevent application readiness.
+
+### Persistence and PocketTerm driver configuration
+
+On PocketTerm A/B, iwd owns saved SSIDs, credentials and per-network settings in
+`/var/lib/iwd`. The existing `/var/lib` bind places these files on Data at
+`/data/persist/var/lib/iwd`. `pocketterm-ab-prepare.service` prepares that bind
+before iwd starts. Saved networks survive ordinary reboot, SWU installation and
+slot changes, subject to compatibility with the previous iwd version. **Forget
+network** removes the selected saved profile from this shared storage, so it is
+also forgotten after rollback. Passwords are never written to lvgl-console's
+settings file; iwd uses its restricted state directory (mode 0700).
+
+| Path | Ownership and update behavior |
+| --- | --- |
+| `/var/lib/iwd` → `/data/persist/var/lib/iwd` | Persistent iwd profiles and state; retained across A/B updates and rollback |
+| `/etc/iwd/main.conf` | Release-owned iwd configuration in each rootfs slot; replaced by an update to that slot |
+| `/etc/systemd/network/wlan0.network` | Release-owned DHCP/address configuration for systemd-networkd |
+| `/run/iwd-wpa2-test` and `/run/systemd/system/iwd.service.d/*` | Temporary diagnostic configuration/overrides; not persistent across reboot |
+
+Full factory disk reflashing replaces Data and saved networks. Slot-local profiles
+from before persistent storage preparation are not automatically migrated.
+
+The PocketTerm BCM43455/brcmfmac setup needs this setting in `/etc/iwd/main.conf`
+for the tested iwd 3.12 / firmware 7.45.286 / FRITZ!Box combination:
+
+```ini
+[DriverQuirks]
+SaeDisable=brcmfmac
+```
+
+Without it, both LVGL and iwctl failed with status 16. With it, iwctl association
+and DHCP succeeded; the operator subsequently reported successful LVGL connection
+after making and installing a new release (2026-11-19). The shared PocketTerm
+overlay includes the quirk for baseline, A/B and public factory images. Mixed
+networks use WPA2; WPA3-only connections are unavailable. Keep the quirk until
+retested with the intended driver, firmware, iwd and AP. An older rollback slot
+may lack it even though saved credentials remain on Data.
+
+Remove temporary `90-wifi-debug.conf` and `91-wpa2-test.conf` runtime drop-ins,
+reload systemd and restart iwd when validating the installed release, so a test
+override cannot mask its actual configuration. The successful connection report
+does not establish reboot reconnection, forget/disconnect behavior or saved-profile
+persistence through both A/B directions and rollback; those remain hardware checks.
+
+The `wifi-client` test uses a private D-Bus and mock iwd; it does not manipulate
+host Wifi. Test real scanning, open/PSK association, incorrect passwords, DHCP,
+forget/reconnect, reboot and A/B rollback persistence on spare target media.

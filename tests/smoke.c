@@ -94,7 +94,8 @@ int main(void)
         logo_area.y2 >= ptt_area.y2 ||
         abs((ptt_area.x1 + ptt_area.x2) - (logo_area.x1 + logo_area.x2)) > 2)
         return EXIT_FAILURE;
-    lv_obj_t *bar = lv_obj_get_child(screen, 1);
+    /* Dropdowns own a hidden screen-level popup; status bar is last. */
+    lv_obj_t *bar = lv_obj_get_child(screen, -1);
     if (lv_obj_get_child_count(bar) != 5 ||
         lv_obj_get_y(bar) < lv_obj_get_height(tabs)) return EXIT_FAILURE;
     for (unsigned i = 0; i < 4; ++i) {
@@ -146,6 +147,29 @@ int main(void)
     }
     lv_group_focus_obj(input);
     lv_obj_t *settings_tab = lv_obj_get_child(content, 2);
+    lv_obj_t *wifi = NULL;
+    for (unsigned i=2; i<lv_obj_get_child_count(settings_tab); ++i) {
+        lv_obj_t *candidate=lv_obj_get_child(settings_tab,i);
+        if (lv_obj_check_type(candidate,&lv_obj_class) && lv_obj_get_child_count(candidate)==6 &&
+            lv_obj_check_type(lv_obj_get_child(candidate,0),&lv_label_class) &&
+            !strcmp(lv_label_get_text(lv_obj_get_child(candidate,0)),"Wifi")) {
+            wifi=candidate;
+            lv_obj_t *network_title=lv_obj_get_child(settings_tab,i-2);
+            if (!lv_obj_check_type(network_title,&lv_label_class) ||
+                strcmp(lv_label_get_text(network_title),"Network status")) return EXIT_FAILURE;
+        }
+    }
+    if (!wifi) return EXIT_FAILURE;
+    lv_obj_t *psk=lv_obj_get_child(wifi,3);
+    if (!lv_obj_check_type(psk,&lv_textarea_class) || lv_textarea_get_password_mode(psk)) return EXIT_FAILURE;
+    lv_textarea_set_text(psk,"visible password");
+    if (strcmp(lv_textarea_get_text(psk),"visible password")) return EXIT_FAILURE;
+    const char *wifi_actions[]={"Scan","Connect","Disconnect","Forget network"};
+    for (unsigned i=0;i<4;i++) {
+        lv_obj_t *button=lv_obj_get_child(lv_obj_get_child(wifi,4+i/2),i%2);
+        if (strcmp(lv_label_get_text(lv_obj_get_child(button,0)),wifi_actions[i]) ||
+            lv_obj_get_group(button)!=group) return EXIT_FAILURE;
+    }
     lv_obj_update_layout(screen);
     if (lv_obj_get_scroll_bottom(settings_tab) <= 0) return EXIT_FAILURE;
     /* Incremental scrolling must match a forced full redraw. */
