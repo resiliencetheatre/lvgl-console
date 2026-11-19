@@ -81,6 +81,7 @@ lv_obj_t *app_wifi_panel_create(lv_obj_t *parent)
     lv_obj_set_size(p->root,LV_PCT(100),LV_SIZE_CONTENT);
     lv_obj_set_style_border_width(p->root,0,0); lv_obj_set_style_pad_all(p->root,0,0);
     lv_obj_set_scrollable(p->root,false); lv_obj_set_flex_flow(p->root,LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(p->root,8,0);
     lv_obj_t *title=lv_label_create(p->root); lv_label_set_text(title,"Wifi");
     lv_obj_set_style_text_font(title,&lv_font_montserrat_20,0);
     p->status=lv_label_create(p->root); lv_obj_set_width(p->status,LV_PCT(100));
@@ -93,11 +94,13 @@ lv_obj_t *app_wifi_panel_create(lv_obj_t *parent)
     lv_textarea_set_max_length(p->password,64); lv_textarea_set_placeholder_text(p->password,"PSK / password (visible)");
     const char *names[]={"Scan","Connect","Disconnect","Forget network"};
     for (unsigned row=0;row<2;row++) {
-        lv_obj_t *box=lv_obj_create(p->root); lv_obj_set_size(box,LV_PCT(100),52);
+        lv_obj_t *box=lv_obj_create(p->root); lv_obj_set_size(box,LV_PCT(100),44);
         lv_obj_set_style_border_width(box,0,0); lv_obj_set_style_pad_all(box,0,0);
         lv_obj_set_scrollable(box,false); lv_obj_set_flex_flow(box,LV_FLEX_FLOW_ROW);
+        lv_obj_set_style_pad_column(box,12,0);
         for (unsigned j=0;j<2;j++) {
-            unsigned i=row*2+j; p->buttons[i]=lv_button_create(box); lv_obj_set_size(p->buttons[i],LV_PCT(48),44);
+            unsigned i=row*2+j; p->buttons[i]=lv_button_create(box); lv_obj_set_size(p->buttons[i],0,44);
+            lv_obj_set_flex_grow(p->buttons[i],1);
             lv_obj_t *label=lv_label_create(p->buttons[i]); lv_label_set_text(label,names[i]); lv_obj_center(label);
             lv_obj_add_event_cb(p->buttons[i],action,LV_EVENT_CLICKED,p); enable(p->buttons[i],false);
         }

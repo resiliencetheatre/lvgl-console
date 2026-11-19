@@ -932,6 +932,11 @@ lv_obj_t *app_ui_create(lv_obj_t *screen)
     if (!audio_timer) lv_obj_add_state(preamble_checkbox, LV_STATE_DISABLED);
     create_network_status(settings);
     wifi_panel = app_wifi_panel_create(settings);
+    lv_obj_t *device_title = lv_label_create(settings);
+    lv_label_set_text(device_title, "Device control");
+    lv_obj_set_style_text_font(device_title, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_margin_top(device_title, 8, 0);
+    lv_obj_set_style_margin_bottom(device_title, 4, 0);
     lv_obj_t *actions = lv_obj_create(settings);
     lv_obj_set_size(actions, LV_PCT(100), 48);
     lv_obj_set_style_pad_all(actions, 0, 0);
