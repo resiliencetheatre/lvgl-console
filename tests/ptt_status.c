@@ -24,7 +24,7 @@ int main(void)
     if (fd < 0) return 1;
     close(fd);
     const struct { const char *data; const char *expected; } cases[] = {
-        {"tx=0\nrx=0\n", "PTT idle"},
+        {"tx=0\nrx=0\n", "UDPPTT idle"},
         {"tx=1\nrx=0\ntxid=pocketterm\n", "TX pocketterm"},
         {"tx=0\nrx=1\ntalker=desktop\n", "RX desktop"},
         {"tx=1\nrx=1\ntxid=pocketterm\ntalker=desktop\n", "TX pocketterm | RX desktop"},
@@ -45,6 +45,6 @@ int main(void)
     if (strcmp(text, "PTT unavailable")) failed = 1;
     online = 0;
     app_ptt_status_read(path, "/tmp/udpptt.sock", text, sizeof(text));
-    if (strcmp(text, "PTT offline")) failed = 1;
+    if (strcmp(text, "UDPPTT offline")) failed = 1;
     return failed;
 }

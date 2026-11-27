@@ -270,7 +270,7 @@ static void create_ping_panel(lv_obj_t *screen)
             panel->ptt_box = box;
             panel->ptt_label = value;
             lv_label_set_long_mode(value, LV_LABEL_LONG_MODE_SCROLL_CIRCULAR);
-            lv_label_set_text(value, "PTT offline");
+            lv_label_set_text(value, "UDPPTT offline");
         }
     }
     panel->timer = lv_timer_create(ping_tick, 250, panel);

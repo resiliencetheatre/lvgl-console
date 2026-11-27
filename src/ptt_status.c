@@ -8,7 +8,7 @@
 void app_ptt_status_read(const char *state_path, const char *socket_path,
                          char *text, size_t size)
 {
-    snprintf(text, size, "PTT offline");
+    snprintf(text, size, "UDPPTT offline");
     struct sockaddr_un address = {.sun_family = AF_UNIX};
     if (strlen(socket_path) >= sizeof(address.sun_path)) return;
     snprintf(address.sun_path, sizeof(address.sun_path), "%s", socket_path);
@@ -38,5 +38,5 @@ void app_ptt_status_read(const char *state_path, const char *socket_path,
     if (tx && rx) snprintf(text, size, "TX %s | RX %s", txid, talker);
     else if (tx) snprintf(text, size, "TX %s", txid);
     else if (rx) snprintf(text, size, "RX %s", talker);
-    else snprintf(text, size, "PTT idle");
+    else snprintf(text, size, "UDPPTT idle");
 }
