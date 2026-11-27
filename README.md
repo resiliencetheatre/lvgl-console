@@ -482,3 +482,19 @@ persistence through both A/B directions and rollback; those remain hardware chec
 The `wifi-client` test uses a private D-Bus and mock iwd; it does not manipulate
 host Wifi. Test real scanning, open/PSK association, incorrect passwords, DHCP,
 forget/reconnect, reboot and A/B rollback persistence on spare target media.
+
+### PTT service selection
+
+Settings provides **PTT Selection** with side-by-side **UDP PTT** and
+**SPACECOM PTT** choices, above **UDP PTT Operation mode**. Selection starts
+`udpptt.service` or `c2ptt.service`; their existing systemd conflicts stop the
+other client. SPACECOM selection first starts and checks `spacecomd.service`.
+The PocketTerm C2 unit also requires and starts after that transport.
+The UI queries actual active services asynchronously at startup and periodically;
+if both or neither are active, neither choice is checked. Failed switches are
+reported and the next query reflects actual service state.
+
+Selection is runtime-only: UDP remains enabled as the boot default. Audio profile
+and preamble changes use `try-restart` so they do not activate UDP when SPACECOM
+is selected. Deploy `/usr/libexec/ptt-service-select` with the application and the
+updated PocketTerm `c2ptt.service`, then run `systemctl daemon-reload`.

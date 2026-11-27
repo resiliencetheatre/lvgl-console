@@ -494,6 +494,7 @@ static void create_volume_controls(lv_obj_t *settings)
 static lv_obj_t *audio_modes[2], *preamble_checkbox;
 static lv_timer_t *audio_timer;
 static pid_t audio_pid = -1;
+static bool ptt_switching;
 
 static void refresh_audio_selection(void)
 {
@@ -534,7 +535,7 @@ static void audio_result(lv_timer_t *timer)
 
 static void select_audio(lv_event_t *event)
 {
-    if (audio_pid > 0) return;
+    if (audio_pid > 0 || ptt_switching) return;
     unsigned index = lv_event_get_target_obj(event) == audio_modes[1];
     bool unchanged = !strcmp(saved_settings.alsa_device,
         index ? "plughw:CARD=UACDemoV10,DEV=0" : "plughw:CARD=Audio,DEV=0");
@@ -595,7 +596,7 @@ static void create_audio_modes(lv_obj_t *settings)
 static void select_preamble(lv_event_t *event)
 {
     (void)event;
-    if (audio_pid > 0) return;
+    if (audio_pid > 0 || ptt_switching) return;
     app_settings next = saved_settings;
     next.preamble_enabled = lv_obj_has_state(preamble_checkbox, LV_STATE_CHECKED);
     if (app_settings_save("/etc/default/udpptt", &next)) {
@@ -605,7 +606,7 @@ static void select_preamble(lv_event_t *event)
         return;
     }
     saved_settings = next;
-    char *argv[] = {"/bin/systemctl", "restart", "udpptt.service", NULL};
+    char *argv[] = {"/bin/systemctl", "try-restart", "udpptt.service", NULL};
     int error = posix_spawn(&audio_pid, argv[0], NULL, NULL, argv, environ);
     if (error) {
         audio_pid = -1;
@@ -617,6 +618,97 @@ static void select_preamble(lv_event_t *event)
     lv_obj_add_state(preamble_checkbox, LV_STATE_DISABLED);
     lv_label_set_text(save_feedback, "Preamble saved; restarting udpptt...");
     lv_timer_resume(audio_timer);
+}
+
+/* Query and switch in a child process: systemd jobs may wait for networking. */
+static lv_obj_t *ptt_choices[2], *ptt_logo_label;
+static pid_t ptt_pid = -1;
+static unsigned ptt_poll_ticks;
+
+static void ptt_service_poll(lv_timer_t *timer)
+{
+    (void)timer;
+    if (ptt_pid > 0) {
+        int status;
+        pid_t result = waitpid(ptt_pid, &status, WNOHANG);
+        if (!result || (result < 0 && errno == EINTR)) return;
+        ptt_pid = -1;
+        if (ptt_switching) {
+            lv_label_set_text(save_feedback,
+                result > 0 && WIFEXITED(status) && WEXITSTATUS(status) == 0
+                ? "PTT service selected." : "PTT selection failed; check service journal.");
+            ptt_switching = false;
+            ptt_poll_ticks = 0;
+        } else {
+            int code = result > 0 && WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+            lv_label_set_text(ptt_logo_label,
+                code == 10 ? "UDP PTT" : code == 11 ? "SPACECOM" : "");
+            for (unsigned i = 0; i < 2; ++i) {
+                if (code == (int)(10 + i)) lv_obj_add_state(ptt_choices[i], LV_STATE_CHECKED);
+                else lv_obj_remove_state(ptt_choices[i], LV_STATE_CHECKED);
+                lv_obj_remove_state(ptt_choices[i], LV_STATE_DISABLED);
+            }
+            ptt_poll_ticks = 20;
+            return;
+        }
+    }
+    if (audio_pid > 0) return;
+    if (ptt_poll_ticks > 0) { --ptt_poll_ticks; return; }
+    char *argv[] = {"/bin/sh", "/usr/libexec/ptt-service-select", "status", NULL};
+    if (posix_spawn(&ptt_pid, argv[0], NULL, NULL, argv, environ)) ptt_pid = -1;
+    ptt_poll_ticks = 20;
+}
+
+static void select_ptt_service(lv_event_t *event)
+{
+    unsigned index = lv_event_get_target_obj(event) == ptt_choices[1];
+    /* The next status query confirms the choice from actual unit state. */
+    for (unsigned i = 0; i < 2; ++i) {
+        lv_obj_remove_state(ptt_choices[i], LV_STATE_CHECKED);
+    }
+    if (ptt_pid > 0 || audio_pid > 0) return;
+    char *argv[] = {"/bin/sh", "/usr/libexec/ptt-service-select",
+                    index ? "spacecom" : "udp", NULL};
+    int error = posix_spawn(&ptt_pid, argv[0], NULL, NULL, argv, environ);
+    if (error) {
+        ptt_pid = -1;
+        lv_label_set_text_fmt(save_feedback, "PTT selection failed: %s", strerror(error));
+        return;
+    }
+    ptt_switching = true;
+    for (unsigned i = 0; i < 2; ++i) lv_obj_add_state(ptt_choices[i], LV_STATE_DISABLED);
+    lv_label_set_text(save_feedback, "Switching PTT service...");
+}
+
+static void delete_ptt_timer(lv_event_t *event)
+{
+    lv_timer_delete(lv_event_get_user_data(event));
+    if (ptt_pid > 0) waitpid(ptt_pid, NULL, WNOHANG);
+    ptt_pid = -1;
+}
+
+static void create_ptt_selection(lv_obj_t *settings)
+{
+    lv_obj_t *title = lv_label_create(settings);
+    lv_label_set_text(title, "PTT Selection");
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_20, 0);
+    lv_obj_t *row = lv_obj_create(settings);
+    lv_obj_set_size(row, LV_PCT(100), 56);
+    lv_obj_set_style_pad_all(row, 0, 0);
+    lv_obj_set_style_border_width(row, 0, 0);
+    lv_obj_set_scrollable(row, false);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    for (unsigned i = 0; i < 2; ++i) {
+        ptt_choices[i] = lv_checkbox_create(row);
+        lv_checkbox_set_text(ptt_choices[i], i ? "SPACECOM PTT" : "UDP PTT");
+        lv_obj_set_scroll_on_focus(ptt_choices[i], false);
+        lv_obj_set_style_radius(ptt_choices[i], LV_RADIUS_CIRCLE, LV_PART_INDICATOR);
+        lv_obj_add_state(ptt_choices[i], LV_STATE_DISABLED);
+        lv_obj_add_event_cb(ptt_choices[i], select_ptt_service, LV_EVENT_VALUE_CHANGED, NULL);
+    }
+    lv_timer_t *timer = lv_timer_create(ptt_service_poll, 100, NULL);
+    if (timer) lv_obj_add_event_cb(row, delete_ptt_timer, LV_EVENT_DELETE, timer);
 }
 
 static void select_operation_mode(lv_event_t *event)
@@ -632,7 +724,7 @@ static void select_operation_mode(lv_event_t *event)
 static void create_operation_modes(lv_obj_t *settings)
 {
     lv_obj_t *title = lv_label_create(settings);
-    lv_label_set_text(title, "PTT Operation mode");
+    lv_label_set_text(title, "UDP PTT Operation mode");
     lv_obj_set_style_text_font(title, &lv_font_montserrat_20, 0);
     const char *names[] = {"WAN", "DARK FIBER", "DATA DIODE (TX)", "DATA DIODE (RX)"};
     for (unsigned row_index = 0; row_index < 2; ++row_index) {
@@ -676,6 +768,7 @@ void app_ui_add_settings_to_group(lv_group_t *group)
     for (unsigned i = 0; i < 3; ++i) lv_group_add_obj(group, settings_fields[i]);
     for (unsigned i = 0; i < 2; ++i) lv_group_add_obj(group, volume_rollers[i]);
     for (unsigned i = 0; i < 4; ++i) lv_group_add_obj(group, operation_modes[i]);
+    for (unsigned i = 0; i < 2; ++i) lv_group_add_obj(group, ptt_choices[i]);
     lv_group_add_obj(group, server_input);
     lv_group_add_obj(group, preamble_checkbox);
     lv_group_add_obj(group, saver_checkbox);
@@ -821,6 +914,12 @@ lv_obj_t *app_ui_create(lv_obj_t *screen)
     lv_obj_set_size(logo, LV_PCT(100), 101);
     lv_image_set_inner_align(logo, LV_IMAGE_ALIGN_CONTAIN);
     lv_obj_align(logo, LV_ALIGN_BOTTOM_MID, 0, -8);
+    /* Overlay inside the existing logo bounds; leave page and logo geometry intact. */
+    ptt_logo_label = lv_label_create(logo);
+    lv_obj_set_floating(ptt_logo_label, true);
+    lv_obj_set_style_text_font(ptt_logo_label, &lv_font_montserrat_14, 0);
+    lv_label_set_text(ptt_logo_label, "");
+    lv_obj_align(ptt_logo_label, LV_ALIGN_BOTTOM_MID, 0, 0);
 
     lv_obj_set_flex_flow(status, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(status, 8, 0);
@@ -915,6 +1014,7 @@ lv_obj_t *app_ui_create(lv_obj_t *screen)
         }
     }
     create_volume_controls(settings);
+    create_ptt_selection(settings);
     create_operation_modes(settings);
     preamble_checkbox = lv_checkbox_create(settings);
     lv_checkbox_set_text(preamble_checkbox, "Audio PTT preamble");
@@ -923,6 +1023,7 @@ lv_obj_t *app_ui_create(lv_obj_t *screen)
     lv_obj_add_event_cb(preamble_checkbox, select_preamble, LV_EVENT_VALUE_CHANGED, NULL);
     lv_obj_t *system_title = lv_label_create(settings);
     lv_label_set_text(system_title, "System settings");
+    lv_obj_set_style_margin_top(system_title, 20, 0);
     lv_obj_set_style_text_font(system_title, &lv_font_montserrat_20, 0);
     saver_checkbox = lv_checkbox_create(settings);
     lv_checkbox_set_text(saver_checkbox, "Screen saver");

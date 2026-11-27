@@ -1,0 +1,21 @@
+#!/bin/sh
+# Runtime selection only: leave the enabled UDP boot default unchanged.
+set -eu
+case "${1:-}" in
+    status)
+        udp=0; c2=0
+        /bin/systemctl is-active --quiet udpptt.service && udp=1
+        /bin/systemctl is-active --quiet c2ptt.service && c2=1
+        if [ "$udp" = 1 ] && [ "$c2" = 0 ]; then exit 10; fi
+        if [ "$udp" = 0 ] && [ "$c2" = 1 ]; then exit 11; fi
+        exit 12
+        ;;
+    udp) /bin/systemctl start udpptt.service ;;
+    spacecom)
+        # Ensure the transport is ready before stopping the current PTT client.
+        /bin/systemctl start spacecomd.service
+        /bin/systemctl is-active --quiet spacecomd.service
+        /bin/systemctl start c2ptt.service
+        ;;
+    *) exit 2 ;;
+esac

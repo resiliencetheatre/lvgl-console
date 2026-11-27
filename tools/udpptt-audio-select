@@ -10,4 +10,4 @@ tmp=$(mktemp /etc/default/.udpptt.XXXXXX)
 trap 'rm -f "$tmp"' EXIT HUP INT TERM
 cp -p "$profile" "$tmp"
 mv -f "$tmp" /etc/default/udpptt
-/bin/systemctl restart udpptt.service
+/bin/systemctl try-restart udpptt.service

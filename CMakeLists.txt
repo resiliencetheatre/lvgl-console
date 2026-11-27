@@ -38,7 +38,7 @@ target_compile_definitions(lvgl-console-launcher PRIVATE
     APP_EXECUTABLE="${CMAKE_INSTALL_FULL_BINDIR}/lvgl-console")
 target_compile_options(lvgl-console-launcher PRIVATE -Wall -Wextra -Wpedantic)
 install(TARGETS lvgl-console lvgl-console-launcher RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-install(PROGRAMS tools/udpptt-audio-select DESTINATION ${CMAKE_INSTALL_LIBEXECDIR})
+install(PROGRAMS tools/udpptt-audio-select tools/ptt-service-select DESTINATION ${CMAKE_INSTALL_LIBEXECDIR})
 install(FILES config/udpptt.usb-hf config/udpptt.usb-monofone DESTINATION /etc/default)
 install(FILES assets/link.png DESTINATION ${CMAKE_INSTALL_DATADIR}/lvgl-console)
 
